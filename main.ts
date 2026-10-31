@@ -1011,6 +1011,7 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
   let isNew = false;
   if (isLocalClaude(session)) {
     const dir = session.config.projectDir;
+  let forkFrom: string | undefined;
     if (dir === "") {
       event.reply("session-needs-dir", sessionId);
       return;
@@ -1043,6 +1044,16 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // A fork whose Claude never wrote its own transcript yet (closed before the first message)
+      // must start as a fork again, not as an empty session; Claude reads the source from `dir`.
+      if (isNew && session.forkedFrom) {
+        const sourceState = inspectTranscript(claudeProjectFolder(dir), session.forkedFrom, centralSessionsDir());
+        if (sourceState === "real" || sourceState === "link-ok") {
+          forkFrom = session.forkedFrom;
+        } else {
+          event.reply("session-warning", "The original conversation of this fork is not in this directory; starting an empty session");
+        }
+      }
       console.error(`Error preparing session ${sessionId} to reopen:`, error);
       event.reply("session-error", message);
       return;
@@ -1060,7 +1071,7 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
   }
 
   // Spawn new PTY in the appropriate directory
-  spawnSessionPty(sessionId, workingDir, session.config, session.sessionUuid, isNew, session.mcpConfigPath, session.config.projectDir);
+  spawnSessionPty(sessionId, workingDir, session.config, session.sessionUuid, isNew, session.mcpConfigPath, session.config.projectDir, forkFrom);
 
   event.reply("session-reopened", sessionId);
 });
@@ -1174,6 +1185,7 @@ ipcMain.on("fork-session", (event, sessionId: string) => {
       linkedDir: dir,
     };
     sessions.push(fork);
+      forkedFrom: original.sessionUuid,
     savePersistedSessions(sessions);
 
     spawnSessionPty(forkId, dir, config, forkUuid, true, undefined, dir, original.sessionUuid);

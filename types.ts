@@ -45,6 +45,8 @@ export interface PersistedSession {
   lastActivity?: number;
   status?: SessionStatus;
   linkedDir?: string;
+  /** a fork's source conversation; used until the fork's own transcript exists */
+  forkedFrom?: string;
 }
 
 export interface SessionRuntime {
