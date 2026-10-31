@@ -4,7 +4,7 @@ import {Terminal} from "xterm";
 import {buildPathPaste} from "./attach-utils";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
-import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup} from "./sidebar-model";
+import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady} from "./terminal-utils";
 import {
   applyTemplate,
@@ -306,6 +306,67 @@ async function loadAndPopulateBranches(
       const option = document.createElement("option");
       option.value = branch;
       option.textContent = branch;
+
+// Project order in the PROJECTS section (drag & drop), remembered per viewer; OTHERS is a
+// separate section and always stays below.
+const PROJECT_ORDER_KEY = "projectOrder";
+const PROJECT_DRAG_MIME = "application/x-agentyard-project";
+
+function loadProjectOrder(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROJECT_ORDER_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch (error) {
+    console.error("Error restoring project order:", error);
+    return [];
+  }
+}
+
+function saveProjectOrder(order: string[]) {
+  try {
+    localStorage.setItem(PROJECT_ORDER_KEY, JSON.stringify(order));
+  } catch (error) {
+    console.error("Error saving project order:", error);
+  }
+}
+
+function clearProjectDropMarkers() {
+  document.querySelectorAll(".project-header.drop-before, .project-header.drop-after")
+    .forEach(el => el.classList.remove("drop-before", "drop-after"));
+}
+
+// Make a project header draggable and a drop target for reordering projects
+function wireProjectReorder(header: HTMLElement, pid: string, orderedIds: string[]) {
+  header.draggable = true;
+  header.addEventListener("dragstart", (e) => {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(PROJECT_DRAG_MIME, pid);
+    e.dataTransfer.effectAllowed = "move";
+  });
+  header.addEventListener("dragend", clearProjectDropMarkers);
+  header.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer?.types.includes(PROJECT_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = header.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    clearProjectDropMarkers();
+    header.classList.add(after ? "drop-after" : "drop-before");
+  });
+  header.addEventListener("dragleave", (e) => {
+    if (!header.contains(e.relatedTarget as Node | null)) header.classList.remove("drop-before", "drop-after");
+  });
+  header.addEventListener("drop", (e) => {
+    const moved = e.dataTransfer?.getData(PROJECT_DRAG_MIME);
+    const after = header.classList.contains("drop-after");
+    clearProjectDropMarkers();
+    if (!moved) return;
+    e.preventDefault();
+    e.stopPropagation();
+    saveProjectOrder(moveProjectInOrder(orderedIds, moved, pid, after));
+    renderSidebar();
+  });
+}
       if (branch === selectedBranch) {
         option.selected = true;
       }
@@ -826,7 +887,7 @@ function renderSidebarNow(list: HTMLElement) {
     allMetas.push(...orphans.map(o => ({ ...o, projectId: OTHER_PROJECT_ID })));
   }
   const now = Date.now();
-  const groups = buildSidebar(allProjects, allMetas, now).filter(
+  const groups = buildSidebar(allProjects, allMetas, now, 7, loadProjectOrder()).filter(
     g => g.project.id !== OTHER_PROJECT_ID || g.recent.length + g.older.length > 0,
   );
 
@@ -856,6 +917,7 @@ function renderSidebarNow(list: HTMLElement) {
     });
     header.querySelector(".group-search-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
+  const orderedIds = groups.map(g => g.project.id).filter(id => id !== OTHER_PROJECT_ID);
       toggleGroupSearch(pid);
     });
     const pMenu = header.querySelector(".session-menu") as HTMLElement;
@@ -866,6 +928,7 @@ function renderSidebarNow(list: HTMLElement) {
       });
       pMenu.classList.toggle("hidden");
     });
+    if (pid !== OTHER_PROJECT_ID) wireProjectReorder(header, pid, orderedIds);
     header.querySelector(".edit-project-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       pMenu.classList.add("hidden");

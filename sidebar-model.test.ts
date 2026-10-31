@@ -1,4 +1,4 @@
-import { buildSidebar, buildStandaloneGroup, filterSidebarGroup } from "./sidebar-model";
+import { buildSidebar, buildStandaloneGroup, filterSidebarGroup, moveProjectInOrder } from "./sidebar-model";
 import { STANDALONE_PROJECT_ID } from "./project-model";
 import { PersistedSession, Project, SessionStatus, SessionType } from "./types";
 
@@ -119,5 +119,25 @@ describe("filterSidebarGroup", () => {
 
   it("keeps the waiting counter of the whole group", () => {
     expect(filterSidebarGroup(group, "zzz")).toEqual({ ...group, recent: [], older: [] });
+  });
+});
+
+describe("project order", () => {
+  const p = (id: string, name: string): Project => ({ id, name, dirs: [`/w/${id}`] });
+  const projects = [p("a", "zeta"), p("b", "alpha"), p("c", "mid")];
+
+  it("sorts by name when there is no saved order", () => {
+    expect(buildSidebar(projects, [], NOW).map(g => g.project.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("follows the saved order; unknown projects go after it by name", () => {
+    expect(buildSidebar(projects, [], NOW, 7, ["a", "b"]).map(g => g.project.id)).toEqual(["a", "b", "c"]);
+    expect(buildSidebar(projects, [], NOW, 7, ["gone", "c"]).map(g => g.project.id)).toEqual(["c", "b", "a"]);
+  });
+
+  it("moves a project before or after another", () => {
+    expect(moveProjectInOrder(["a", "b", "c"], "c", "a", false)).toEqual(["c", "a", "b"]);
+    expect(moveProjectInOrder(["a", "b", "c"], "a", "c", true)).toEqual(["b", "c", "a"]);
+    expect(moveProjectInOrder(["a", "b", "c"], "b", "b", false)).toEqual(["a", "b", "c"]);
   });
 });

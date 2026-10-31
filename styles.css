@@ -292,6 +292,15 @@ body {
     color: var(--vsc-fg);
   }
 
+  /* Drag & drop reorder of projects: insertion line above / below the target header */
+  .project-header.drop-before {
+    box-shadow: inset 0 2px 0 var(--vsc-focus);
+  }
+
+  .project-header.drop-after {
+    box-shadow: inset 0 -2px 0 var(--vsc-focus);
+  }
+
   /* Title takes the free space so the search and ⋯ buttons sit together on the right */
   .project-title {
     flex: 1 1 auto;
@@ -729,15 +738,6 @@ body {
     box-shadow: inset 0 0 0 1px var(--vsc-focus);
   }
 
-  /* Drop preview: the whole pane (assign/swap) or the half a split would create */
-  .pane-drop-preview {
-    @apply absolute hidden pointer-events-none;
-    z-index: 11;
-    background-color: rgba(0, 127, 212, 0.18);
-    box-shadow: inset 0 0 0 2px var(--vsc-focus);
-  }
-
-  .pane.drop-target .pane-drop-preview {
   /* With several panes the focused one stays dark; the others get a faint gray veil so the
      active cell stands out while their text stays easy to read */
   .pane::after {
@@ -752,6 +752,15 @@ body {
     opacity: 0.85;
   }
 
+  /* Drop preview: the whole pane (assign/swap) or the half a split would create */
+  .pane-drop-preview {
+    @apply absolute hidden pointer-events-none;
+    z-index: 11;
+    background-color: rgba(0, 127, 212, 0.18);
+    box-shadow: inset 0 0 0 2px var(--vsc-focus);
+  }
+
+  .pane.drop-target .pane-drop-preview {
     @apply block;
   }
 

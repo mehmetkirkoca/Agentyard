@@ -40,16 +40,32 @@ function buildGroup(
 }
 
 // Project groups for the PROJECTS section; the built-in standalone project is left out.
+// `order` (project ids, from drag & drop) wins; projects not in it follow, sorted by name.
 export function buildSidebar(
   projects: Project[],
   sessions: PersistedSession[],
   now: number,
   staleDays = 7,
+  order: string[] = [],
 ): SidebarGroup[] {
+  const rank = (p: Project) => {
+    const i = order.indexOf(p.id);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
   return projects
     .filter(p => !isStandaloneProject(p))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
     .map(project => buildGroup(project, sessions, now, staleDays));
+}
+
+// New project order after dropping `movedId` before (or after) `targetId`.
+export function moveProjectInOrder(order: string[], movedId: string, targetId: string, after: boolean): string[] {
+  if (movedId === targetId) return order;
+  const rest = order.filter(id => id !== movedId);
+  const index = rest.indexOf(targetId);
+  if (index === -1) return [...rest, movedId];
+  rest.splice(after ? index + 1 : index, 0, movedId);
+  return rest;
 }
 
 // The SESSIONS section group; undefined when the built-in standalone project is not loaded yet.
