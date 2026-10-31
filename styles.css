@@ -738,6 +738,20 @@ body {
   }
 
   .pane.drop-target .pane-drop-preview {
+  /* With several panes the focused one stays dark; the others get a faint gray veil so the
+     active cell stands out while their text stays easy to read */
+  .pane::after {
+    transition: background-color 0.12s ease;
+  }
+
+  .pane-grid.multi .pane:not(.focused)::after {
+    background-color: rgba(90, 90, 90, 0.22);
+  }
+
+  .pane-grid.multi .pane:not(.focused) .pane-header {
+    opacity: 0.85;
+  }
+
     @apply block;
   }
 
