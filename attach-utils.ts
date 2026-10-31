@@ -35,6 +35,16 @@ export function buildPathPaste(paths: string[]): string {
   return `${PASTE_START} ${quoted.join(" ")} ${PASTE_END}`;
 }
 
+/**
+ * A prompt text as one bracketed paste with no Enter, so it lands in the input box unsent.
+ * Control characters other than newlines and tabs are removed, so the text cannot end the paste.
+ * Returns "" for blank text.
+ */
+export function buildTextPaste(text: string): string {
+  const clean = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+  return clean.trim() ? `${PASTE_START}${clean}${PASTE_END}` : "";
+}
+
 const pad = (value: number, width = 2) => String(value).padStart(width, "0");
 
 /**

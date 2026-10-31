@@ -8,7 +8,7 @@ import * as path from "path";
 import {simpleGit} from "simple-git";
 import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
-import {attachmentFileName, attachmentsDir} from "./attach-utils";
+import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
@@ -16,8 +16,9 @@ import {getBranches, getCurrentBranch} from "./git-utils";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
+import {buildForkTranscript} from "./fork-transcript";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
-import {isTerminalReady} from "./terminal-utils";
+import {BRACKETED_PASTE_MODE_ENABLE, isTerminalReady} from "./terminal-utils";
 import {hasMcpListResult, parseMcpListOutput} from "./mcp-utils";
 import {inspectTranscript, relinkTranscript} from "./link-store";
 import {TranscriptMeta} from "./transcript-meta";
@@ -551,6 +552,9 @@ function spawnMcpPoller(sessionId: string, projectDir: string) {
 }
 
 
+// Pause between Claude turning on bracketed paste and the prefill, so its input box has mounted
+const PREFILL_DELAY_MS = 500;
+
 // Helper function to spawn PTY and setup coding agent
 function spawnSessionPty(
   sessionId: string,
@@ -560,7 +564,9 @@ function spawnSessionPty(
   isNewSession: boolean,
   mcpConfigPath?: string,
   projectDir?: string,
-  forkFrom?: string
+  forkFrom?: string,
+  /** text pasted into Claude's input box, unsent, once Claude is up (a fork's prompt) */
+  prefill?: string
 ) {
   const shell = os.platform() === "darwin" ? "zsh" : "bash";
   const ptyProcess = pty.spawn(shell, ["-l"], {
@@ -587,11 +593,27 @@ function spawnSessionPty(
   let lastReadyCheckPos = 0;
   let setupCommandsIdx = 0;
   let dataBuffer = "";
+  // Claude turns on bracketed paste once its input box listens; the shell turned it off when it ran
+  // the command, so the first "on" after the command is Claude's
+  let prefillPending = false;
+  let prefillTail = "";
 
   ptyProcess.onData((data) => {
     // Only send data if window still exists and is not destroyed
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("session-output", sessionId, data);
+    }
+
+    if (prefillPending) {
+      const seen = prefillTail + data;
+      prefillTail = seen.slice(-BRACKETED_PASTE_MODE_ENABLE.length);
+      if (seen.includes(BRACKETED_PASTE_MODE_ENABLE)) {
+        prefillPending = false;
+        const paste = buildTextPaste(prefill ?? "");
+        setTimeout(() => {
+          if (activePtyProcesses.get(sessionId) === ptyProcess && paste) ptyProcess.write(paste);
+        }, PREFILL_DELAY_MS);
+      }
     }
 
     // Detect when terminal is ready
@@ -634,6 +656,7 @@ function spawnSessionPty(
               settingsPath,
             });
             ptyProcess.write(claudeCmd + "\r");
+            prefillPending = !!prefill;
 
             // Start MCP poller immediately (auth is handled by shell environment)
             if (!mcpPollerPtyProcesses.has(sessionId) && projectDir) {
@@ -1142,23 +1165,30 @@ ipcMain.on("delete-session", async (_event, sessionId: string) => {
 // Sticky prompt bar: the user's prompts from a session's transcript, read incrementally per uuid
 const promptHistories = new Map<string, PromptHistory>();
 
+// Central store first; a transcript not yet adopted still lives in the project folder
+function sessionTranscriptFile(session: PersistedSession): string | undefined {
+  const candidates = [path.join(centralSessionsDir(), `${session.sessionUuid}.jsonl`)];
+  const dir = session.linkedDir || session.config.projectDir;
+  if (dir) candidates.push(path.join(claudeProjectFolder(dir), `${session.sessionUuid}.jsonl`));
+  return candidates.find(f => fs.existsSync(f));
+}
+
+function readSessionPrompts(session: PersistedSession): PromptHistory | undefined {
+  const file = sessionTranscriptFile(session);
+  if (!file) return undefined;
+  const history = readUserPrompts(file, promptHistories.get(session.sessionUuid));
+  promptHistories.set(session.sessionUuid, history);
+  return history;
+}
+
 ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return [];
-  const uuid = session.sessionUuid;
-  // Central store first; a transcript not yet adopted still lives in the project folder
-  const candidates = [path.join(centralSessionsDir(), `${uuid}.jsonl`)];
-  const dir = session.linkedDir || session.config.projectDir;
-  if (dir) candidates.push(path.join(claudeProjectFolder(dir), `${uuid}.jsonl`));
-  const file = candidates.find(f => fs.existsSync(f));
-  if (!file) return [];
   try {
-    const history = readUserPrompts(file, promptHistories.get(uuid));
-    promptHistories.set(uuid, history);
-    return history.prompts;
+    return readSessionPrompts(session)?.prompts ?? [];
   } catch (error) {
     console.error(`Error reading prompts of session ${sessionId}:`, error);
-    return promptHistories.get(uuid)?.prompts ?? [];
+    return promptHistories.get(session.sessionUuid)?.prompts ?? [];
   }
 });
 
@@ -1181,49 +1211,101 @@ ipcMain.on("rename-session", (_event, sessionId: string, newName: string) => {
 
 // Fork a local Claude session: a new session that starts as a copy of the conversation.
 // It runs in the original's directory, where Claude can read the original transcript.
+// Shared by both forks: checks the original and prepares (but does not save) the fork's record
+function prepareFork(sessions: PersistedSession[], sessionId: string): {original: PersistedSession; fork: PersistedSession; dir: string; warning?: string} {
+  const original = sessions.find(s => s.id === sessionId);
+  if (!original) throw new Error("Session not found");
+  if (!isLocalClaude(original)) throw new Error("Only local Claude sessions can be forked");
+  const dir = original.linkedDir || original.config.projectDir;
+  if (!dir) throw new Error("Choose a directory for this session first");
+  ensureScratchDir(dir);
+  const linkState = inspectTranscript(claudeProjectFolder(dir), original.sessionUuid, centralSessionsDir());
+  if (linkState !== "real" && linkState !== "link-ok") {
+    throw new Error("This conversation has no messages yet; nothing to fork");
+  }
+
+  const forkId = `session-${Date.now()}`;
+  const gate = localClaudeGate(sessions, {sessionId: forkId, targetDir: dir});
+  if (gate.error) throw new Error(gate.error);
+
+  const fork: PersistedSession = {
+    id: forkId,
+    number: getNextSessionNumber(),
+    name: `${original.name} (fork)`,
+    config: {...original.config, projectDir: dir},
+    createdAt: Date.now(),
+    sessionUuid: uuidv4(),
+    projectId: original.projectId,
+    origin: "agentyard",
+    manualName: true,
+    lastActivity: Date.now(),
+    linkedDir: dir,
+  };
+  return {original, fork, dir, warning: gate.warning};
+}
+
 ipcMain.on("fork-session", (event, sessionId: string) => {
   try {
     const sessions = getPersistedSessions();
-    const original = sessions.find(s => s.id === sessionId);
-    if (!original) throw new Error("Session not found");
-    if (!isLocalClaude(original)) throw new Error("Only local Claude sessions can be forked");
-    const dir = original.linkedDir || original.config.projectDir;
-    if (!dir) throw new Error("Choose a directory for this session first");
-    ensureScratchDir(dir);
-    const linkState = inspectTranscript(claudeProjectFolder(dir), original.sessionUuid, centralSessionsDir());
-    if (linkState !== "real" && linkState !== "link-ok") {
-      throw new Error("This conversation has no messages yet; nothing to fork");
-    }
-
-    const forkId = `session-${Date.now()}`;
-    const gate = localClaudeGate(sessions, {sessionId: forkId, targetDir: dir});
-    if (gate.error) throw new Error(gate.error);
-
-    const forkUuid = uuidv4();
-    const config: SessionConfig = {...original.config, projectDir: dir};
-    const fork: PersistedSession = {
-      id: forkId,
-      number: getNextSessionNumber(),
-      name: `${original.name} (fork)`,
-      config,
-      createdAt: Date.now(),
-      sessionUuid: forkUuid,
-      projectId: original.projectId,
-      origin: "agentyard",
-      manualName: true,
-      lastActivity: Date.now(),
-      linkedDir: dir,
-      forkedFrom: original.sessionUuid,
-    };
+    const {original, fork, dir, warning} = prepareFork(sessions, sessionId);
+    fork.forkedFrom = original.sessionUuid;
     sessions.push(fork);
     savePersistedSessions(sessions);
 
-    spawnSessionPty(forkId, dir, config, forkUuid, true, undefined, dir, original.sessionUuid);
-    event.reply("session-created", forkId, fork);
-    if (gate.warning) event.reply("session-warning", gate.warning);
+    spawnSessionPty(fork.id, dir, fork.config, fork.sessionUuid, true, undefined, dir, original.sessionUuid);
+    event.reply("session-created", fork.id, fork);
+    if (warning) event.reply("session-warning", warning);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error forking session ${sessionId}:`, error);
+    event.reply("session-error", `Fork failed: ${message}`);
+  }
+});
+
+// Fork ending right before one of the user's prompts: Agentyard writes the fork's transcript (see
+// fork-transcript.ts) and Claude resumes it with that prompt waiting, unsent, in the input box.
+// No forkedFrom: re-forking the whole original would be wrong if this transcript went missing.
+ipcMain.on("fork-session-at", (event, sessionId: string, promptIndex: number, promptText: string) => {
+  try {
+    const sessions = getPersistedSessions();
+    const {original, fork, dir, warning} = prepareFork(sessions, sessionId);
+    const source = sessionTranscriptFile(original);
+    const history = readSessionPrompts(original);
+    if (!source || !history) throw new Error("The conversation's transcript was not found");
+    // The renderer's list may be stale: the index must still point at the same prompt
+    const promptUuid = history.uuids[promptIndex];
+    if (history.prompts[promptIndex] !== promptText || !promptUuid) {
+      throw new Error("The conversation changed; open the prompt list again");
+    }
+
+    const entries: any[] = [];
+    for (const line of fs.readFileSync(source, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        entries.push(JSON.parse(line));
+      } catch {
+        // skip a broken line, as Claude Code does
+      }
+    }
+    const lines = buildForkTranscript(entries, promptUuid, {
+      forkUuid: fork.sessionUuid,
+      newUuid: uuidv4,
+      now: new Date().toISOString(),
+      title: fork.name,
+    });
+    const folder = claudeProjectFolder(dir);
+    fs.mkdirSync(folder, {recursive: true});
+    const target = path.join(folder, `${fork.sessionUuid}.jsonl`);
+    fs.writeFileSync(target, lines.join("\n") + "\n", {flag: "wx"});
+
+    sessions.push(fork);
+    savePersistedSessions(sessions);
+    spawnSessionPty(fork.id, dir, fork.config, fork.sessionUuid, false, undefined, dir, undefined, promptText);
+    event.reply("session-created", fork.id, fork);
+    if (warning) event.reply("session-warning", warning);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error forking session ${sessionId} at prompt ${promptIndex + 1}:`, error);
     event.reply("session-error", `Fork failed: ${message}`);
   }
 });

@@ -542,8 +542,12 @@ function openPromptPicker(leafId: number, anchor: HTMLElement): void {
   popover.className = "prompt-picker";
   popover.innerHTML = prompts.map((prompt, idx) => {
     const oneLine = escapeHtml(prompt.replace(/\s+/g, " ").trim());
+    // The first prompt has nothing before it to fork from
+    const fork = idx > 0
+      ? `<span class="prompt-picker-fork" data-idx="${idx}" title="Fork the conversation right before this prompt">Fork</span>`
+      : "";
     return `<button class="prompt-picker-row${idx === current ? " current" : ""}" data-idx="${idx}" title="${escapeHtml(prompt)}">
-      <span class="prompt-picker-number">${idx + 1}</span><span class="prompt-picker-text">${oneLine}</span></button>`;
+      <span class="prompt-picker-number">${idx + 1}</span><span class="prompt-picker-text">${oneLine}</span>${fork}</button>`;
   }).join("");
 
   const position = () => {
@@ -578,9 +582,14 @@ function openPromptPicker(leafId: number, anchor: HTMLElement): void {
   document.addEventListener("keydown", onKey);
 
   popover.querySelectorAll<HTMLButtonElement>(".prompt-picker-row").forEach(row => {
-    row.addEventListener("click", () => {
+    row.addEventListener("click", (e) => {
       close();
-      scrollPaneToPrompt(sticky, Number(row.dataset.idx));
+      const idx = Number(row.dataset.idx);
+      if ((e.target as HTMLElement).closest(".prompt-picker-fork")) {
+        ipcRenderer.send("fork-session-at", sessionId, idx, prompts[idx]);
+      } else {
+        scrollPaneToPrompt(sticky, idx);
+      }
     });
   });
 }

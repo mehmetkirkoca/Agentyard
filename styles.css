@@ -986,6 +986,25 @@ body {
     text-overflow: ellipsis;
   }
 
+  /* Shown on the hovered row only */
+  .prompt-picker-fork {
+    @apply ml-auto flex-shrink-0 rounded invisible;
+    padding: 0 6px;
+    font-size: 11px;
+    line-height: 18px;
+    color: var(--vsc-fg);
+    border: 1px solid var(--vsc-widget-border);
+  }
+
+  .prompt-picker-row:hover .prompt-picker-fork {
+    @apply visible;
+  }
+
+  .prompt-picker-fork:hover {
+    color: var(--vsc-fg-strong);
+    background-color: var(--vsc-button);
+  }
+
   /* Splitter bars between panes */
   .pane-splitter {
     @apply absolute;

@@ -2,6 +2,7 @@ import {
   attachmentFileName,
   attachmentsDir,
   buildPathPaste,
+  buildTextPaste,
   PASTE_END,
   PASTE_START,
   quotePath,
@@ -57,6 +58,20 @@ describe("buildPathPaste", () => {
   it("returns an empty string when there is nothing to insert", () => {
     expect(buildPathPaste([])).toBe("");
     expect(buildPathPaste(["\x1b\r"])).toBe("");
+  });
+});
+
+describe("buildTextPaste", () => {
+  it("wraps the text in one bracketed paste, keeping newlines and tabs", () => {
+    expect(buildTextPaste("soru\r\n\tdevam")).toBe(`${PASTE_START}soru\n\tdevam${PASTE_END}`);
+  });
+
+  it("removes control characters that could end the paste early", () => {
+    expect(buildTextPaste(`a${PASTE_END}b`)).toBe(`${PASTE_START}a[201~b${PASTE_END}`);
+  });
+
+  it("is empty for blank text", () => {
+    expect(buildTextPaste("  \n ")).toBe("");
   });
 });
 

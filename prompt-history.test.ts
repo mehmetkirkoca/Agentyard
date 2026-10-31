@@ -6,16 +6,17 @@ import {applyPromptLines, readUserPrompts, PromptHistory} from "./prompt-history
 const user = (content: unknown, extra: object = {}) =>
   JSON.stringify({type: "user", message: {role: "user", content}, ...extra});
 
-const empty = (): PromptHistory => ({size: 0, prompts: []});
+const empty = (): PromptHistory => ({size: 0, prompts: [], uuids: []});
 
 describe("applyPromptLines", () => {
   it("collects string and text-part prompts in order", () => {
     const h = applyPromptLines(empty(), [
-      user("Birinci soru"),
+      user("Birinci soru", {uuid: "b1"}),
       JSON.stringify({type: "assistant", message: {content: "cevap"}}),
-      user([{type: "text", text: "İkinci soru"}, {type: "image"}]),
+      user([{type: "text", text: "İkinci soru"}, {type: "image"}], {uuid: "b2"}),
     ]);
     expect(h.prompts).toEqual(["Birinci soru", "İkinci soru"]);
+    expect(h.uuids).toEqual(["b1", "b2"]);
   });
 
   it("skips tool results, meta entries, system tags, interrupts and broken lines", () => {
@@ -35,8 +36,9 @@ describe("applyPromptLines", () => {
   });
 
   it("appends to the previous prompts", () => {
-    const h = applyPromptLines({size: 10, prompts: ["eski"]}, [user("yeni")]);
+    const h = applyPromptLines({size: 10, prompts: ["eski"], uuids: ["e"]}, [user("yeni", {uuid: "y"})]);
     expect(h.prompts).toEqual(["eski", "yeni"]);
+    expect(h.uuids).toEqual(["e", "y"]);
   });
 });
 
@@ -65,7 +67,7 @@ describe("readUserPrompts", () => {
 
   it("starts over when the file shrank", () => {
     fs.writeFileSync(file, `${user("yeni")}\n`);
-    const h = readUserPrompts(file, {size: 99999, prompts: ["eski"]});
+    const h = readUserPrompts(file, {size: 99999, prompts: ["eski"], uuids: ["e"]});
     expect(h.prompts).toEqual(["yeni"]);
   });
 
