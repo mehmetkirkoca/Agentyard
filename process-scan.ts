@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 export interface ClaudeProcess {
@@ -41,9 +42,46 @@ function splitNul(buf: Buffer): string[] {
   return parts;
 }
 
-export function scanClaudeProcesses(procRoot?: string): ClaudeProcess[] {
+/** Claude Code's live-process registry: <home>/.claude/sessions/<pid>.json */
+export function claudeSessionRegistryDir(home: string = os.homedir()): string {
+  return path.join(home, ".claude", "sessions");
+}
+
+/** Start time of a process (field 22 of /proc/<pid>/stat); comm may contain spaces and ")". */
+function procStartTime(procDir: string): string | undefined {
+  try {
+    const stat = fs.readFileSync(path.join(procDir, "stat"), "utf-8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The conversation a Claude process has open, from the entry Claude Code keeps for it in its
+ * session registry. The entry counts only when its procStart matches the running process, so an
+ * entry left by an earlier process with a reused pid is ignored. Any doubt yields undefined.
+ */
+function registrySessionUuid(sessionsDir: string, pid: string, procDir: string): string | undefined {
+  try {
+    const entry = JSON.parse(fs.readFileSync(path.join(sessionsDir, `${pid}.json`), "utf-8"));
+    if (typeof entry?.sessionId !== "string" || !UUID_RE.test(entry.sessionId)) return undefined;
+    const start = procStartTime(procDir);
+    if (entry.procStart === undefined || start === undefined || String(entry.procStart) !== start) return undefined;
+    return entry.sessionId;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `sessionsDir` defaults to Claude Code's registry only for the real /proc, so a test passing a
+ * fake procRoot never reads the user's registry.
+ */
+export function scanClaudeProcesses(procRoot?: string, sessionsDir?: string): ClaudeProcess[] {
   if (!procRoot && process.platform !== "linux") return [];
   const root = procRoot ?? "/proc";
+  const registry = sessionsDir ?? (procRoot ? undefined : claudeSessionRegistryDir());
 
   let entries: string[];
   try {
@@ -73,7 +111,9 @@ export function scanClaudeProcesses(procRoot?: string): ClaudeProcess[] {
       if (env.some(e => OWN_SESSION_ENV_PREFIXES.some(prefix => e.startsWith(prefix)))) continue;
 
       const cwd = fs.readlinkSync(path.join(dir, "cwd")).replace(/ \(deleted\)$/, "");
-      result.push({pid: Number(entry), cwd, sessionUuid: parsed.sessionUuid});
+      // A uuid-less command line (plain `claude`) is identified from Claude Code's registry
+      const sessionUuid = parsed.sessionUuid ?? (registry ? registrySessionUuid(registry, entry, dir) : undefined);
+      result.push({pid: Number(entry), cwd, sessionUuid});
     } catch {
       // pid vanished or not permitted: skip silently
     }

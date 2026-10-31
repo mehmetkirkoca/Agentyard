@@ -111,4 +111,62 @@ describe("scanClaudeProcesses", () => {
   it("returns [] for a missing proc root", () => {
     expect(scanClaudeProcesses(path.join(root, "nope"))).toEqual([]);
   });
+
+  describe("Claude Code session registry", () => {
+    let sessionsDir: string;
+
+    // /proc/<pid>/stat with the given starttime (field 22); comm holds ") " to test parsing
+    const writeStat = (pid: string, startTime: string) => {
+      const after = Array.from({length: 50},(_, i) => (i === 19 ? startTime : "0")).join(" ");
+      fs.writeFileSync(path.join(root, pid, "stat"), `${pid} (cla) ude) ${after}\n`);
+    };
+    const writeEntry = (pid: string, entry: object | string) => {
+      fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), typeof entry === "string" ? entry : JSON.stringify(entry));
+    };
+
+    beforeEach(() => {
+      sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-sessions-"));
+    });
+    afterEach(() => {
+      fs.rmSync(sessionsDir, {recursive: true, force: true});
+    });
+
+    it("identifies a uuid-less claude from its registry entry", () => {
+      addPid("200", ["claude"]);
+      writeStat("200", "4242");
+      writeEntry("200", {pid: 200, sessionId: UUID, procStart: "4242"});
+      expect(scanClaudeProcesses(root, sessionsDir)).toEqual([{pid: 200, cwd: cwdTarget, sessionUuid: UUID}]);
+    });
+
+    it("ignores an entry left by an earlier process with the same pid", () => {
+      addPid("201", ["claude"]);
+      writeStat("201", "9999");
+      writeEntry("201", {pid: 201, sessionId: UUID, procStart: "4242"});
+      expect(scanClaudeProcesses(root, sessionsDir)[0].sessionUuid).toBeUndefined();
+    });
+
+    it("ignores entries without procStart, with a bad sessionId or invalid JSON", () => {
+      for (const pid of ["202", "203", "204"]) {
+        addPid(pid, ["claude"]);
+        writeStat(pid, "4242");
+      }
+      writeEntry("202", {pid: 202, sessionId: UUID});
+      writeEntry("203", {pid: 203, sessionId: "not-a-uuid", procStart: "4242"});
+      writeEntry("204", "{broken");
+      expect(scanClaudeProcesses(root, sessionsDir).map(p => p.sessionUuid)).toEqual([undefined, undefined, undefined]);
+    });
+
+    it("keeps the command line uuid over the registry", () => {
+      addPid("205", ["claude", "--resume", UUID]);
+      writeStat("205", "4242");
+      writeEntry("205", {pid: 205, sessionId: UUID2, procStart: "4242"});
+      expect(scanClaudeProcesses(root, sessionsDir)[0].sessionUuid).toBe(UUID);
+    });
+
+    it("stays uuid-less without a registry entry", () => {
+      addPid("206", ["claude"]);
+      writeStat("206", "4242");
+      expect(scanClaudeProcesses(root, sessionsDir)[0].sessionUuid).toBeUndefined();
+    });
+  });
 });
