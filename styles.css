@@ -855,6 +855,30 @@ body {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
   }
 
+  .context-menu .session-menu-item:disabled {
+    color: var(--vsc-fg-dim);
+    background-color: transparent;
+    cursor: default;
+  }
+
+  .context-menu-separator {
+    height: 1px;
+    margin: 4px 0;
+    background-color: var(--vsc-widget-border);
+  }
+
+  .tab-name-input {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    padding: 0 4px;
+    font-size: 13px;
+    color: var(--vsc-fg-strong);
+    background-color: var(--vsc-input);
+    border: 1px solid var(--vsc-focus);
+    outline: none;
+  }
+
   .pane > .session-wrapper,
   .pane > .pane-placeholder {
     top: 22px;

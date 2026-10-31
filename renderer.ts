@@ -1,5 +1,5 @@
 import {FitAddon} from "@xterm/addon-fit";
-import {ipcRenderer, webUtils} from "electron";
+import {clipboard, ipcRenderer, webUtils} from "electron";
 import {Terminal} from "xterm";
 import {buildPathPaste} from "./attach-utils";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
@@ -1087,6 +1087,11 @@ function markSessionAsUnread(sessionId: string) {
   const tab = document.getElementById(`tab-${sessionId}`);
   if (tab) {
     tab.classList.add("unread");
+  tab.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openTabContextMenu(sessionId, e.clientX, e.clientY);
+  });
+
   }
 }
 
@@ -1518,6 +1523,127 @@ function clearDropMarkers() {
     el.classList.remove("drop-before", "drop-after", "drop-target");
   });
 }
+// --- Tab context menu (right click), VS Code style ---
+type ContextMenuItem = {label: string; run: () => void; disabled?: boolean} | "separator";
+let contextMenu: HTMLElement | null = null;
+
+function closeContextMenu() {
+  contextMenu?.remove();
+  contextMenu = null;
+  document.removeEventListener("mousedown", onContextMenuOutside, true);
+  document.removeEventListener("keydown", onContextMenuKey, true);
+  window.removeEventListener("blur", closeContextMenu);
+  window.removeEventListener("resize", closeContextMenu);
+}
+
+function onContextMenuOutside(e: MouseEvent) {
+  if (!contextMenu?.contains(e.target as Node)) closeContextMenu();
+}
+
+function onContextMenuKey(e: KeyboardEvent) {
+  if (e.key !== "Escape") return;
+  e.stopPropagation();
+  closeContextMenu();
+}
+
+function openContextMenu(x: number, y: number, items: ContextMenuItem[]) {
+  closeContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "attach-menu context-menu";
+  for (const entry of items) {
+    if (entry === "separator") {
+      const sep = document.createElement("div");
+      sep.className = "context-menu-separator";
+      menu.appendChild(sep);
+      continue;
+    }
+    const item = document.createElement("button");
+    item.className = "session-menu-item";
+    item.textContent = entry.label;
+    item.disabled = !!entry.disabled;
+    item.addEventListener("click", () => {
+      closeContextMenu();
+      entry.run();
+    });
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  contextMenu = menu;
+  // Keep the menu inside the window
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4))}px`;
+  document.addEventListener("mousedown", onContextMenuOutside, true);
+  document.addEventListener("keydown", onContextMenuKey, true);
+  window.addEventListener("blur", closeContextMenu);
+  window.addEventListener("resize", closeContextMenu);
+}
+
+function openTabContextMenu(sessionId: string, x: number, y: number) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const tabs = openTabIds();
+  const index = tabs.indexOf(sessionId);
+  const others = tabs.filter(id => id !== sessionId);
+  const toTheRight = tabs.slice(index + 1);
+  const inFocusedPane = paneSession(paneState, paneState.focused) === sessionId;
+  const localClaude = isLocalClaude(session.config);
+  const dir = session.worktreePath || session.config.projectDir;
+  openContextMenu(x, y, [
+    {label: "Close", run: () => closeSession(sessionId)},
+    {label: "Close Others", run: () => others.forEach(closeSession), disabled: others.length === 0},
+    {label: "Close to the Right", run: () => toTheRight.forEach(closeSession), disabled: toTheRight.length === 0},
+    {label: "Close All", run: () => tabs.forEach(closeSession)},
+    "separator",
+    {label: "Split Right", run: () => splitPaneWith(paneState.focused, "right", sessionId), disabled: inFocusedPane},
+    {label: "Split Down", run: () => splitPaneWith(paneState.focused, "bottom", sessionId), disabled: inFocusedPane},
+    "separator",
+    {label: "Rename…", run: () => startEditingTabName(sessionId)},
+    {label: "Fork", run: () => ipcRenderer.send("fork-session", sessionId), disabled: !localClaude},
+    {label: "Copy Directory Path", run: () => {
+      clipboard.writeText(dir);
+      showToast(`Copied ${dir}`, "info");
+    }, disabled: !dir},
+  ]);
+}
+
+// Inline rename on the tab itself (Enter saves, Escape cancels)
+function startEditingTabName(sessionId: string) {
+  const tab = document.getElementById(`tab-${sessionId}`);
+  const nameEl = tab?.querySelector<HTMLElement>(".tab-name");
+  const session = sessions.get(sessionId);
+  if (!tab || !nameEl || !session) return;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tab-name-input";
+  input.value = session.name;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (save: boolean) => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    if (save && newName && newName !== session.name) {
+      session.name = newName;
+      ipcRenderer.send("rename-session", sessionId, newName);
+    }
+    nameEl.textContent = session.name;
+    nameEl.setAttribute("title", session.name);
+    input.replaceWith(nameEl);
+    renderSidebar();
+    refreshPaneBreadcrumbs();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("mousedown", (e) => e.stopPropagation());
+}
+
 
 function warnPaneLimit() {
   showToast(`At most ${MAX_PANES} panes can be open.`, "warning");
