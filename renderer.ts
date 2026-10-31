@@ -750,6 +750,33 @@ document.getElementById("standalone-search-btn")?.addEventListener("click", e =>
   toggleGroupSearch(STANDALONE_PROJECT_ID);
 });
 
+// MCP SERVERS header is an accordion too; its state is remembered per viewer
+const MCP_COLLAPSED_KEY = "mcpCollapsed";
+
+function setMcpCollapsed(collapsed: boolean) {
+  document.getElementById("mcp-server-list")?.classList.toggle("hidden", collapsed);
+  const chevron = document.getElementById("mcp-chevron");
+  if (chevron) chevron.textContent = collapsed ? "▸" : "▾";
+  try {
+    localStorage.setItem(MCP_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch (error) {
+    console.error("Error saving MCP section state:", error);
+  }
+}
+
+(function initMcpToggle() {
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(MCP_COLLAPSED_KEY) === "1";
+  } catch (error) {
+    console.error("Error restoring MCP section state:", error);
+  }
+  setMcpCollapsed(collapsed);
+  document.getElementById("mcp-toggle")?.addEventListener("click", () => {
+    setMcpCollapsed(!document.getElementById("mcp-server-list")?.classList.contains("hidden"));
+  });
+})();
+
 // OTHERS header works like a project accordion: click to collapse / expand
 document.getElementById("standalone-toggle")?.addEventListener("click", () => {
   collapsedProjects.set(STANDALONE_PROJECT_ID, collapsedProjects.get(STANDALONE_PROJECT_ID) !== true);
