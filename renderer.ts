@@ -6,6 +6,7 @@ import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus,
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady} from "./terminal-utils";
+import {currentPromptIndex, hasJumpToBottom, seekStep} from "./sticky-prompt";
 import {
   applyTemplate,
   assignSession,
@@ -402,6 +403,200 @@ async function loadAndPopulateBranches(
   }
 }
 
+// Pane prompt line: the prompt whose answer is at the top of the terminal, tracked from the screen
+interface StickyPromptController {
+  term: Terminal;
+  prompts(): string[];
+  currentIndex(): number | null;
+  refreshPrompts(): void;
+  /** Scroll until the prompt at `target` sits on the top rows */
+  scrollToPrompt(target: number): Promise<void>;
+}
+const stickyPrompts = new Map<string, StickyPromptController>();
+const STICKY_RESCAN_DELAY_MS = 100;
+const SEEK_MAX_STEPS = 400;
+const SEEK_STEP_TIMEOUT_MS = 150;
+
+function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptController {
+  let prompts: string[] = [];
+  let index: number | null = null;
+  let rescanTimer: NodeJS.Timeout | null = null;
+
+  let seekToken = 0;
+
+  // Only the visible rows: fullscreen Claude Code scrolls its own view, so the screen is all there is
+  const visibleLines = () => {
+    const buffer = term.buffer.active;
+    const lines: string[] = [];
+    for (let i = buffer.viewportY; i < buffer.viewportY + term.rows; i++) {
+      lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+    }
+    return lines;
+  };
+
+  const isScrolledUp = (lines: string[]) => {
+    const buffer = term.buffer.active;
+    return buffer.viewportY < buffer.baseY || hasJumpToBottom(lines);
+  };
+
+  const rescan = () => {
+    rescanTimer = null;
+    const lines = visibleLines();
+    const next = currentPromptIndex(lines, prompts, isScrolledUp(lines), index);
+    if (next === index) return;
+    index = next;
+    renderPanePromptOf(sessionId);
+  };
+  const scheduleRescan = () => {
+    if (!rescanTimer) rescanTimer = setTimeout(rescan, STICKY_RESCAN_DELAY_MS);
+  };
+
+  term.onWriteParsed(scheduleRescan);
+  term.onScroll(scheduleRescan);
+  term.onRender(scheduleRescan); // user scrolling repaints even where onScroll stays silent
+
+  // One wheel notch: fullscreen Claude Code tracks the mouse and scrolls its own view, so the
+  // notch goes to the PTY as an SGR wheel report, as xterm sends it; otherwise xterm scrolls itself
+  const scrollOneStep = (direction: "up" | "down"): Promise<void> => {
+    if (term.modes.mouseTrackingMode === "none") {
+      term.scrollLines(direction === "up" ? -1 : 1);
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      const done = () => {
+        clearTimeout(timer);
+        parsed.dispose();
+        resolve();
+      };
+      const timer = setTimeout(done, SEEK_STEP_TIMEOUT_MS);
+      const parsed = term.onWriteParsed(done);
+      const button = direction === "up" ? 64 : 65;
+      ipcRenderer.send("session-input", sessionId, `\x1b[<${button};1;${Math.ceil(term.rows / 2)}M`);
+    });
+  };
+
+  const controller: StickyPromptController = {
+    term,
+    prompts: () => prompts,
+    currentIndex: () => index,
+    refreshPrompts() {
+      ipcRenderer.invoke("get-session-prompts", sessionId)
+        .then((next: string[]) => {
+          prompts = next; // only ever grows, so the current index stays valid
+          renderPanePromptOf(sessionId); // the list button follows the prompt count
+          scheduleRescan();
+        })
+        .catch(error => console.error(`Failed to load prompts of session ${sessionId}:`, error));
+    },
+    async scrollToPrompt(target: number) {
+      const token = ++seekToken; // a newer request cancels this one
+      // In fullscreen the top row is Claude Code's sticky header, which echoes a prompt of its own
+      const skipRows = term.buffer.active.type === "alternate" ? 1 : 0;
+      let current = index;
+      let last: "up" | "down" | null = null;
+      for (let step = 0; step < SEEK_MAX_STEPS && token === seekToken; step++) {
+        const lines = visibleLines();
+        const scrolledUp = isScrolledUp(lines);
+        current = currentPromptIndex(lines, prompts, scrolledUp, current);
+        const next = seekStep(lines, prompts, target, skipRows, scrolledUp, current);
+        // A turn means the target was passed without being recognised: stop next to it
+        if (next === "done" || (last !== null && next !== last)) break;
+        last = next;
+        await scrollOneStep(next);
+      }
+      scheduleRescan();
+    },
+  };
+  controller.refreshPrompts();
+  return controller;
+}
+
+// Fill a pane's prompt line from the session it shows; the line stays even when empty, so the
+// terminal height never changes
+function renderPanePrompt(pane: HTMLElement, sessionId: string | undefined): void {
+  const line = pane.querySelector(".pane-prompt") as HTMLElement | null;
+  if (!line) return;
+  const sticky = sessionId ? stickyPrompts.get(sessionId) : undefined;
+  const current = sticky?.currentIndex() ?? null;
+  const prompt = sticky && current !== null ? sticky.prompts()[current] ?? null : null;
+  (line.querySelector(".pane-prompt-text") as HTMLElement).textContent = prompt ? prompt.replace(/\s+/g, " ").trim() : "";
+  line.classList.toggle("empty", !prompt);
+  (line.querySelector(".pane-prompt-text") as HTMLElement).title = prompt ?? "";
+  (line.querySelector(".pane-prompt-list") as HTMLButtonElement).disabled = !sticky || sticky.prompts().length === 0;
+}
+
+// Prompt list under a pane's prompt line, in conversation order; picking one scrolls to it
+let promptPickerCloser: (() => void) | null = null;
+let promptPickerLeafId: number | null = null;
+
+function openPromptPicker(leafId: number, anchor: HTMLElement): void {
+  promptPickerCloser?.();
+  const sessionId = paneSession(paneState, leafId);
+  const sticky = sessionId ? stickyPrompts.get(sessionId) : undefined;
+  if (!sticky) return;
+  const prompts = sticky.prompts();
+  if (prompts.length === 0) return;
+  const current = sticky.currentIndex();
+
+  const popover = document.createElement("div");
+  popover.className = "prompt-picker";
+  popover.innerHTML = prompts.map((prompt, idx) => {
+    const oneLine = escapeHtml(prompt.replace(/\s+/g, " ").trim());
+    return `<button class="prompt-picker-row${idx === current ? " current" : ""}" data-idx="${idx}" title="${escapeHtml(prompt)}">
+      <span class="prompt-picker-number">${idx + 1}</span><span class="prompt-picker-text">${oneLine}</span></button>`;
+  }).join("");
+
+  const position = () => {
+    const rect = anchor.getBoundingClientRect();
+    popover.style.top = `${rect.bottom + 2}px`;
+    popover.style.right = `${Math.max(4, window.innerWidth - rect.right)}px`;
+  };
+  position();
+  document.body.appendChild(popover);
+  popover.querySelector(".prompt-picker-row.current")?.scrollIntoView({block: "nearest"});
+  window.addEventListener("resize", position);
+
+  const onDocClick = (e: MouseEvent) => {
+    if (!popover.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  };
+  function close() {
+    popover.remove();
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKey);
+    window.removeEventListener("resize", position);
+    if (promptPickerCloser === close) {
+      promptPickerCloser = null;
+      promptPickerLeafId = null;
+    }
+  }
+  promptPickerCloser = close;
+  promptPickerLeafId = leafId;
+  document.addEventListener("click", onDocClick, true);
+  document.addEventListener("keydown", onKey);
+
+  popover.querySelectorAll<HTMLButtonElement>(".prompt-picker-row").forEach(row => {
+    row.addEventListener("click", () => {
+      close();
+      scrollPaneToPrompt(sticky, Number(row.dataset.idx));
+    });
+  });
+}
+
+function scrollPaneToPrompt(sticky: StickyPromptController, target: number): void {
+  sticky.scrollToPrompt(target)
+    .catch(error => console.error(`Failed to scroll to prompt ${target + 1}:`, error))
+    .finally(() => sticky.term.focus());
+}
+
+function renderPanePromptOf(sessionId: string): void {
+  const leafId = paneOfSession(paneState, sessionId);
+  const pane = leafId === null ? undefined : paneElements.get(leafId);
+  if (pane) renderPanePrompt(pane, sessionId);
+}
+
 function createTerminalUI(sessionId: string) {
   const themeColors = THEME_PRESETS[terminalSettings.theme] || THEME_PRESETS["macos-dark"];
 
@@ -427,6 +622,8 @@ function createTerminalUI(sessionId: string) {
   // term.open() waits until renderPanes shows the element: opened inside the hidden
   // container, xterm measures a 0px cell, so the first fit is skipped and the PTY
   // keeps its 80x30 spawn size while the terminal shows 80x24.
+
+  stickyPrompts.set(sessionId, createStickyPrompt(sessionId, term));
 
   term.onData((data) => {
     ipcRenderer.send("session-input", sessionId, data);
@@ -1692,6 +1889,23 @@ function createPaneElement(leafId: number): HTMLElement {
   pane.className = "pane";
   pane.dataset.leafId = String(leafId);
   pane.appendChild(createPaneHeader(pane, leafId));
+  const promptLine = document.createElement("div");
+  promptLine.className = "pane-prompt empty";
+  promptLine.innerHTML = `<span class="pane-prompt-glyph">❯</span><span class="pane-prompt-text"></span>
+    <button class="pane-prompt-list" title="All prompts" disabled>▾</button>`;
+  const listButton = promptLine.querySelector(".pane-prompt-list") as HTMLButtonElement;
+  listButton.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (promptPickerLeafId === leafId) promptPickerCloser?.();
+    else openPromptPicker(leafId, listButton);
+  });
+  promptLine.addEventListener("click", () => {
+    const sessionId = paneSession(paneState, leafId);
+    const sticky = sessionId ? stickyPrompts.get(sessionId) : undefined;
+    const current = sticky?.currentIndex() ?? null;
+    if (sticky && current !== null) scrollPaneToPrompt(sticky, current);
+  });
+  pane.appendChild(promptLine);
   const placeholder = document.createElement("div");
   placeholder.className = "pane-placeholder";
   pane.appendChild(placeholder);
@@ -2127,6 +2341,7 @@ function renderPanes() {
     header.draggable = treeLeaves.length > 1;
     header.title = treeLeaves.length > 1 ? "Drag onto another pane: center swaps, edges move it there" : "";
     renderPaneBreadcrumb(pane, leafNode.id, session);
+    renderPanePrompt(pane, session?.id);
     const canAttach = !!paneClaudeSession(leafNode.id);
     header.querySelectorAll<HTMLButtonElement>(".pane-session-action").forEach(btn => {
       btn.disabled = !canAttach;
@@ -2513,6 +2728,17 @@ ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStat
   refreshSessionIndicator(sessionId);
   applyTabStatus(sessionId);
   renderSidebar();
+});
+
+// A hook event may follow a new prompt in the transcript: refresh that session's pane prompt line
+ipcRenderer.on("session-prompts-changed", (_event, sessionId: string) => {
+  const sticky = stickyPrompts.get(sessionId);
+  if (!sticky) return;
+  if (sessions.get(sessionId)?.terminal !== sticky.term) {
+    stickyPrompts.delete(sessionId); // terminal was disposed or recreated
+    return;
+  }
+  sticky.refreshPrompts();
 });
 
 // Handle session created

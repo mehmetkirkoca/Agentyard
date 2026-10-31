@@ -888,7 +888,102 @@ body {
 
   .pane > .session-wrapper,
   .pane > .pane-placeholder {
+    top: 44px; /* pane header + prompt line */
+  }
+
+  /* Prompt line under the pane header: the question whose answer is at the top of the terminal */
+  .pane-prompt {
+    @apply absolute left-0 right-0 flex items-center select-none;
     top: 22px;
+    height: 22px;
+    gap: 6px;
+    padding: 0 8px;
+    font-size: 12px;
+    color: var(--vsc-fg);
+    background-color: var(--vsc-bg);
+    border-bottom: 1px solid var(--vsc-border);
+  }
+
+  .pane-prompt:not(.empty) {
+    cursor: pointer;
+  }
+
+  .pane-prompt:not(.empty):hover {
+    background-color: var(--vsc-hover);
+  }
+
+  .pane-prompt-glyph {
+    color: var(--vsc-fg-muted);
+  }
+
+  .pane-prompt.empty .pane-prompt-glyph {
+    color: var(--vsc-fg-dim);
+  }
+
+  .pane-prompt-text {
+    @apply overflow-hidden whitespace-nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .pane-prompt-list {
+    @apply ml-auto flex-shrink-0 rounded;
+    width: 20px;
+    height: 18px;
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .pane-prompt-list:hover:not(:disabled) {
+    color: var(--vsc-fg-strong);
+    background-color: var(--vsc-active);
+  }
+
+  .pane-prompt-list:disabled {
+    @apply cursor-default;
+    color: var(--vsc-fg-dim);
+  }
+
+  /* Prompt list: same look as the directory picker */
+  .prompt-picker {
+    @apply fixed z-50 overflow-y-auto;
+    width: min(560px, 90vw);
+    max-height: 60vh;
+    padding: 4px;
+    background-color: var(--vsc-widget);
+    border: 1px solid var(--vsc-widget-border);
+    border-radius: 5px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+  }
+
+  .prompt-picker-row {
+    @apply w-full flex items-center text-left;
+    gap: 10px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 3px;
+    font-size: 13px;
+    color: var(--vsc-fg);
+  }
+
+  .prompt-picker-row:hover {
+    background-color: var(--vsc-menu-hover);
+    color: var(--vsc-fg-strong);
+  }
+
+  .prompt-picker-row.current {
+    background-color: var(--vsc-active);
+  }
+
+  .prompt-picker-number {
+    @apply flex-shrink-0 text-right;
+    min-width: 20px;
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .prompt-picker-text {
+    @apply overflow-hidden whitespace-nowrap;
+    text-overflow: ellipsis;
   }
 
   /* Splitter bars between panes */

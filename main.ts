@@ -15,6 +15,7 @@ import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {getBranches, getCurrentBranch} from "./git-utils";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
+import {PromptHistory, readUserPrompts} from "./prompt-history";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {isTerminalReady} from "./terminal-utils";
 import {hasMcpListResult, parseMcpListOutput} from "./mcp-utils";
@@ -232,6 +233,10 @@ function processStatusFile(filePath: string): void {
       }
       return status;
     });
+    // Any hook event may follow a prompt landing in the transcript: let the renderer re-read them
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("session-prompts-changed", target.id);
+    }
   } catch (error) {
     console.error(`Error processing status file ${filePath}:`, error);
   }
@@ -1132,6 +1137,29 @@ ipcMain.on("delete-session", async (_event, sessionId: string) => {
   savePersistedSessions(getPersistedSessions().filter(s => s.id !== sessionId));
 
   mainWindow.webContents.send("session-deleted", sessionId);
+});
+
+// Sticky prompt bar: the user's prompts from a session's transcript, read incrementally per uuid
+const promptHistories = new Map<string, PromptHistory>();
+
+ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
+  const session = getPersistedSessions().find(s => s.id === sessionId);
+  if (!session) return [];
+  const uuid = session.sessionUuid;
+  // Central store first; a transcript not yet adopted still lives in the project folder
+  const candidates = [path.join(centralSessionsDir(), `${uuid}.jsonl`)];
+  const dir = session.linkedDir || session.config.projectDir;
+  if (dir) candidates.push(path.join(claudeProjectFolder(dir), `${uuid}.jsonl`));
+  const file = candidates.find(f => fs.existsSync(f));
+  if (!file) return [];
+  try {
+    const history = readUserPrompts(file, promptHistories.get(uuid));
+    promptHistories.set(uuid, history);
+    return history.prompts;
+  } catch (error) {
+    console.error(`Error reading prompts of session ${sessionId}:`, error);
+    return promptHistories.get(uuid)?.prompts ?? [];
+  }
 });
 
 // Get all persisted sessions
