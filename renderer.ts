@@ -941,6 +941,7 @@ function renderSidebarNow(list: HTMLElement) {
           <button class="session-menu-item edit-project-btn">Edit project</button>
         </div>
       </div>
+      ${pid !== OTHER_PROJECT_ID ? `<button class="section-add-btn project-new-session-btn" title="New Session" aria-label="New Session">+</button>` : ""}
     `;
     header.addEventListener("click", () => {
       collapsedProjects.set(pid, !collapsed);
@@ -957,6 +958,10 @@ function renderSidebarNow(list: HTMLElement) {
         if (m !== pMenu) m.classList.add("hidden");
       });
       pMenu.classList.toggle("hidden");
+    });
+    header.querySelector(".project-new-session-btn")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openNewSessionDialog(pid).catch(error => console.error("Failed to open the new session dialog:", error));
     });
     header.querySelector(".edit-project-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2687,11 +2692,6 @@ sessionTypeSelect?.addEventListener("change", () => {
     worktreeDescription?.style.setProperty("display", "none");
     localDescription?.style.setProperty("display", "block");
   }
-});
-
-// New session button - opens modal
-document.getElementById("new-session")?.addEventListener("click", () => {
-  openNewSessionDialog().catch(error => console.error("Failed to open the new session dialog:", error));
 });
 
 // SESSIONS "+": same dialog with the standalone project preselected

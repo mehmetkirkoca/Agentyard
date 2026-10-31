@@ -131,6 +131,13 @@ body {
     padding: 0 8px 0 12px;
   }
 
+  /* PROJECTS header: taller, with a divider and gap so the project list stands apart */
+  .projects-section-header {
+    height: 32px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--vsc-border-strong);
+  }
+
   .sidebar-section-title {
     @apply uppercase font-bold;
     font-size: 11px;
@@ -1110,13 +1117,15 @@ body {
   }
 
   /* Projects */
+  /* Bordered so it reads as a button, unlike the bare icon buttons on the project rows */
   .project-add-btn {
     @apply rounded ml-auto;
     height: 20px;
-    padding: 0 6px;
+    padding: 0 8px;
     margin-right: 2px;
     font-size: 11px;
     color: var(--vsc-fg);
+    border: 1px solid var(--vsc-widget-border);
   }
 
   .project-link {
