@@ -276,36 +276,36 @@ let activeSessionId: string | null = null;
 let projects: Project[] = [];
 let runtime: Record<string, SessionRuntime> = {};
 let syncWarnings: string[] = [];
-const collapsedProjects = new Map<string, boolean>(); // true = collapsed (default expanded)
-const olderExpanded = new Map<string, boolean>(); // true = expanded (default collapsed)
+// Accordion flags that survive restarts: every change is written to localStorage (per viewer)
+class PersistedFlags extends Map<string, boolean> {
+  constructor(private readonly storageKey: string) {
+    super();
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+      if (saved && typeof saved === "object") {
+        for (const [k, v] of Object.entries(saved)) if (typeof v === "boolean") super.set(k, v);
+      }
+    } catch (error) {
+      console.error(`Error restoring ${storageKey}:`, error);
+    }
+  }
+
+  set(key: string, value: boolean): this {
+    super.set(key, value);
+    // storageKey is unset while the base constructor runs; nothing to save then
+    if (!this.storageKey) return this;
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(Object.fromEntries(this)));
+    } catch (error) {
+      console.error(`Error saving ${this.storageKey}:`, error);
+    }
+    return this;
+  }
+}
+
+const collapsedProjects = new PersistedFlags("collapsedGroups"); // true = collapsed (default expanded)
+const olderExpanded = new PersistedFlags("olderExpanded"); // true = expanded (default collapsed)
 const OTHER_PROJECT_ID = "__other__";
-let mcpServers: McpServer[] = [];
-let mcpPollerActive = false;
-let terminalSettings: TerminalSettings = { ...DEFAULT_SETTINGS };
-
-const PANE_STATE_KEY = "paneLayout";
-const SESSION_DRAG_MIME = "application/x-agentyard-session";
-const PANE_DRAG_MIME = "application/x-agentyard-pane";
-let paneState: PaneState = loadPaneState();
-
-// Track activity timers for each session
-const activityTimers = new Map<string, NodeJS.Timeout>();
-
-async function loadAndPopulateBranches(
-  directory: string,
-  selectedBranch?: string
-): Promise<void> {
-  const branches = await ipcRenderer.invoke("get-branches", directory);
-  existingBranches = branches;
-  parentBranchSelect.innerHTML = "";
-
-  if (branches.length === 0) {
-    parentBranchSelect.innerHTML = '<option value="">No git repository found</option>';
-  } else {
-    branches.forEach((branch: string) => {
-      const option = document.createElement("option");
-      option.value = branch;
-      option.textContent = branch;
 
 // Project order in the PROJECTS section (drag & drop), remembered per viewer; OTHERS is a
 // separate section and always stays below.
@@ -367,6 +367,33 @@ function wireProjectReorder(header: HTMLElement, pid: string, orderedIds: string
     renderSidebar();
   });
 }
+let mcpServers: McpServer[] = [];
+let mcpPollerActive = false;
+let terminalSettings: TerminalSettings = { ...DEFAULT_SETTINGS };
+
+const PANE_STATE_KEY = "paneLayout";
+const SESSION_DRAG_MIME = "application/x-agentyard-session";
+const PANE_DRAG_MIME = "application/x-agentyard-pane";
+let paneState: PaneState = loadPaneState();
+
+// Track activity timers for each session
+const activityTimers = new Map<string, NodeJS.Timeout>();
+
+async function loadAndPopulateBranches(
+  directory: string,
+  selectedBranch?: string
+): Promise<void> {
+  const branches = await ipcRenderer.invoke("get-branches", directory);
+  existingBranches = branches;
+  parentBranchSelect.innerHTML = "";
+
+  if (branches.length === 0) {
+    parentBranchSelect.innerHTML = '<option value="">No git repository found</option>';
+  } else {
+    branches.forEach((branch: string) => {
+      const option = document.createElement("option");
+      option.value = branch;
+      option.textContent = branch;
       if (branch === selectedBranch) {
         option.selected = true;
       }
@@ -890,6 +917,7 @@ function renderSidebarNow(list: HTMLElement) {
   const groups = buildSidebar(allProjects, allMetas, now, 7, loadProjectOrder()).filter(
     g => g.project.id !== OTHER_PROJECT_ID || g.recent.length + g.older.length > 0,
   );
+  const orderedIds = groups.map(g => g.project.id).filter(id => id !== OTHER_PROJECT_ID);
 
   list.innerHTML = "";
   for (const g of groups) {
@@ -900,6 +928,7 @@ function renderSidebarNow(list: HTMLElement) {
 
     const header = document.createElement("div");
     header.className = "project-header";
+    if (pid !== OTHER_PROJECT_ID) wireProjectReorder(header, pid, orderedIds);
     const waiting = g.waitingCount > 0 ? ` <span class="project-waiting">· ${g.waitingCount} waiting</span>` : "";
     header.innerHTML = `
       <span class="project-title truncate"><span class="section-chevron">${collapsed ? "▸" : "▾"}</span>${escapeHtml(g.project.name)}${waiting}</span>
@@ -917,7 +946,6 @@ function renderSidebarNow(list: HTMLElement) {
     });
     header.querySelector(".group-search-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
-  const orderedIds = groups.map(g => g.project.id).filter(id => id !== OTHER_PROJECT_ID);
       toggleGroupSearch(pid);
     });
     const pMenu = header.querySelector(".session-menu") as HTMLElement;
@@ -928,7 +956,6 @@ function renderSidebarNow(list: HTMLElement) {
       });
       pMenu.classList.toggle("hidden");
     });
-    if (pid !== OTHER_PROJECT_ID) wireProjectReorder(header, pid, orderedIds);
     header.querySelector(".edit-project-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       pMenu.classList.add("hidden");
@@ -1060,6 +1087,11 @@ function addTab(sessionId: string, name: string) {
     closeSession(sessionId);
   });
 
+  tab.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openTabContextMenu(sessionId, e.clientX, e.clientY);
+  });
+
   tab.addEventListener("dragstart", (e) => {
     if (!e.dataTransfer) return;
     e.dataTransfer.setData(SESSION_DRAG_MIME, sessionId);
@@ -1087,11 +1119,6 @@ function markSessionAsUnread(sessionId: string) {
   const tab = document.getElementById(`tab-${sessionId}`);
   if (tab) {
     tab.classList.add("unread");
-  tab.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    openTabContextMenu(sessionId, e.clientX, e.clientY);
-  });
-
   }
 }
 
@@ -1496,33 +1523,6 @@ function savePaneState() {
   }
 }
 
-function openTabIds(): string[] {
-  return Array.from(document.querySelectorAll<HTMLElement>("#tabs .tab")).map(tab => tab.dataset.sessionId ?? "");
-}
-
-function isSessionDrag(e: DragEvent): boolean {
-  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes(SESSION_DRAG_MIME);
-}
-
-function isPaneDrag(e: DragEvent): boolean {
-  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes(PANE_DRAG_MIME);
-}
-
-// Files dragged in from the OS file manager (tabs and pane headers use their own MIME types)
-function isFileDrag(e: DragEvent): boolean {
-  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
-}
-
-// Visible in any pane counts as seen for the tab unread/activity marks
-function isShownInPane(sessionId: string): boolean {
-  return visibleSessions(paneState).includes(sessionId) && !!sessions.get(sessionId)?.element;
-}
-
-function clearDropMarkers() {
-  document.querySelectorAll(".tab.drop-before, .tab.drop-after, .pane.drop-target").forEach(el => {
-    el.classList.remove("drop-before", "drop-after", "drop-target");
-  });
-}
 // --- Tab context menu (right click), VS Code style ---
 type ContextMenuItem = {label: string; run: () => void; disabled?: boolean} | "separator";
 let contextMenu: HTMLElement | null = null;
@@ -1644,6 +1644,33 @@ function startEditingTabName(sessionId: string) {
   input.addEventListener("mousedown", (e) => e.stopPropagation());
 }
 
+function openTabIds(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("#tabs .tab")).map(tab => tab.dataset.sessionId ?? "");
+}
+
+function isSessionDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes(SESSION_DRAG_MIME);
+}
+
+function isPaneDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes(PANE_DRAG_MIME);
+}
+
+// Files dragged in from the OS file manager (tabs and pane headers use their own MIME types)
+function isFileDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+}
+
+// Visible in any pane counts as seen for the tab unread/activity marks
+function isShownInPane(sessionId: string): boolean {
+  return visibleSessions(paneState).includes(sessionId) && !!sessions.get(sessionId)?.element;
+}
+
+function clearDropMarkers() {
+  document.querySelectorAll(".tab.drop-before, .tab.drop-after, .pane.drop-target").forEach(el => {
+    el.classList.remove("drop-before", "drop-after", "drop-target");
+  });
+}
 
 function warnPaneLimit() {
   showToast(`At most ${MAX_PANES} panes can be open.`, "warning");
