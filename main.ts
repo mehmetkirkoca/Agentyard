@@ -457,6 +457,9 @@ function writeMcpConfigFile(projectDir: string, mcpServers: any): string | null 
   }
 }
 
+// Piped, so Claude prints plain text instead of a cursor-positioned TUI render
+const MCP_LIST_COMMAND = "claude mcp list 2>&1 | cat";
+
 // Give up waiting for a parseable `claude mcp list` result after this long
 const MCP_POLL_TIMEOUT_MS = 45000;
 
@@ -523,8 +526,7 @@ function spawnMcpPoller(sessionId: string, projectDir: string) {
       }
 
       const pollStartedAt = Date.now();
-      // Piped, so Claude prints plain text instead of a cursor-positioned TUI render
-      const command = `claude mcp list 2>&1 | cat`;
+      const command = MCP_LIST_COMMAND;
       ptyProcess.write(command + "\r");
       // If nothing parseable arrives (e.g. the CLI output format changed), stop the spinner anyway
       setTimeout(() => {
@@ -1009,9 +1011,9 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
   }
 
   let isNew = false;
+  let forkFrom: string | undefined;
   if (isLocalClaude(session)) {
     const dir = session.config.projectDir;
-  let forkFrom: string | undefined;
     if (dir === "") {
       event.reply("session-needs-dir", sessionId);
       return;
@@ -1042,8 +1044,6 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
         session.linkedDir = dir;
         savePersistedSessions(sessions);
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       // A fork whose Claude never wrote its own transcript yet (closed before the first message)
       // must start as a fork again, not as an empty session; Claude reads the source from `dir`.
       if (isNew && session.forkedFrom) {
@@ -1054,6 +1054,8 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
           event.reply("session-warning", "The original conversation of this fork is not in this directory; starting an empty session");
         }
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error(`Error preparing session ${sessionId} to reopen:`, error);
       event.reply("session-error", message);
       return;
@@ -1183,9 +1185,9 @@ ipcMain.on("fork-session", (event, sessionId: string) => {
       manualName: true,
       lastActivity: Date.now(),
       linkedDir: dir,
+      forkedFrom: original.sessionUuid,
     };
     sessions.push(fork);
-      forkedFrom: original.sessionUuid,
     savePersistedSessions(sessions);
 
     spawnSessionPty(forkId, dir, config, forkUuid, true, undefined, dir, original.sessionUuid);
@@ -1470,7 +1472,7 @@ ipcMain.handle("list-mcp-servers", async (_event, sessionId: string) => {
     // Trigger an immediate MCP list command in the session's poller
     const mcpPoller = mcpPollerPtyProcesses.get(sessionId);
     if (mcpPoller) {
-      mcpPoller.write("claude mcp list\r");
+      mcpPoller.write(MCP_LIST_COMMAND + "\r");
     }
     // Return empty array - actual results will come via mcp-servers-updated event
     return [];
