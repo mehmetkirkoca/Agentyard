@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Agentyard Terminal</title>
+    <link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="dist/styles.css" />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+      }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden">
+    <div class="flex h-full">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <h1 class="sidebar-title">Agentyard</h1>
+          <button id="open-settings" class="settings-btn" title="Settings" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.9 5.9L3.5 17.5a1.8 1.8 0 0 0 2.5 2.5l5.3-5.3a4.5 4.5 0 0 0 5.9-5.9l-2.8 2.8-2.4-.6-.6-2.4z"/></svg></button>
+        </div>
+
+        <div class="sidebar-content">
+          <div class="sidebar-section">
+            <div class="sidebar-section-header">
+              <div class="sidebar-section-title">PROJECTS</div>
+              <button id="new-project" class="project-add-btn" title="New Project">+ Project</button>
+              <button id="new-session" class="section-add-btn" title="New Session">+</button>
+            </div>
+            <div id="session-list"></div>
+            <div id="sync-warnings" class="sync-warnings hidden"></div>
+          </div>
+
+          <div class="sidebar-section" id="standalone-section">
+            <div class="sidebar-section-header">
+              <div id="standalone-toggle" class="sidebar-section-title section-toggle" title="Collapse / expand"><span id="standalone-chevron" class="section-chevron">▾</span>OTHERS <span id="standalone-waiting" class="project-waiting hidden"></span></div>
+              <button id="standalone-search-btn" class="group-search-btn" title="Search sessions" aria-label="Search sessions"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+              <div class="relative section-menu-wrap">
+                <button id="standalone-menu-btn" class="session-menu-btn project-menu-btn" title="Others options">⋯</button>
+                <div id="standalone-menu" class="session-menu hidden">
+                  <button id="standalone-edit-dirs" class="session-menu-item">Edit directories</button>
+                </div>
+              </div>
+              <button id="new-standalone-session" class="section-add-btn" title="New Standalone Session">+</button>
+            </div>
+            <div id="standalone-search-slot"></div>
+            <div id="standalone-session-list"></div>
+          </div>
+
+          <div class="sidebar-section" id="mcp-section" style="display: none;">
+            <div class="sidebar-section-header">
+              <div class="sidebar-section-title">MCP SERVERS</div>
+              <button id="add-mcp-server" class="section-add-btn" title="Add MCP Server">+</button>
+            </div>
+            <div id="mcp-server-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar resize handle -->
+      <div id="sidebar-resizer" class="sidebar-resizer" title="Drag to resize, double-click to reset"></div>
+
+      <!-- Main content -->
+      <div class="flex-1 min-w-0 flex flex-col">
+        <!-- Tabs -->
+        <div class="tabs-row">
+          <button id="toggle-sidebar" class="sidebar-toggle-btn" title="Toggle sidebar (Ctrl+Shift+B)" aria-label="Toggle sidebar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+          <div id="tabs" class="tabs-container"></div>
+          <div id="layout-picker" class="layout-picker">
+            <button class="layout-btn" data-layout="single" title="Single">□</button>
+            <button class="layout-btn" data-layout="columns" title="Split side by side">◫</button>
+            <button class="layout-btn" data-layout="rows" title="Split top/bottom">⬒</button>
+            <button class="layout-btn" data-layout="grid" title="2×2 grid">⊞</button>
+            <button id="split-link-toggle" class="layout-btn split-link-toggle hidden" title="Linked splits">✥</button>
+          </div>
+        </div>
+
+        <!-- Session container -->
+        <div id="session-container" class="flex-1 relative">
+          <div id="pane-grid" class="pane-grid"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session Configuration Modal -->
+    <div id="config-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <h2 class="modal-title">New Session Configuration</h2>
+
+        <div class="form-group" id="project-select-group">
+          <label class="form-label">Project</label>
+          <select id="session-project" class="form-select"></select>
+          <a id="create-project-first" href="#" class="project-link hidden">Create a project first</a>
+        </div>
+
+        <div class="form-group" id="directory-select-group">
+          <label class="form-label">Directory</label>
+          <select id="session-directory" class="form-select"></select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Session Type</label>
+          <select id="session-type" class="form-select">
+            <option value="worktree">Worktree</option>
+            <option value="local">Local</option>
+          </select>
+          <div class="text-xs text-gray-400 mt-2">
+            <div id="worktree-description">Creates an isolated git branch in a separate directory. Best for experimenting with changes without affecting your main workspace.</div>
+            <div id="local-description" style="display: none;">Works directly in your project directory. Best when you need to see changes immediately (e.g., app restart required) or working on non-git projects.</div>
+          </div>
+        </div>
+
+        <div class="form-group" id="parent-branch-group">
+          <label class="form-label">Parent Branch</label>
+          <select id="parent-branch" class="form-select">
+            <option value="">Loading branches...</option>
+          </select>
+        </div>
+
+        <div class="form-group" id="branch-name-group">
+          <label class="form-label">Branch Name (optional)</label>
+          <input type="text" id="branch-name" class="form-input" placeholder="e.g., feature/add-login" />
+          <span id="branch-name-error" class="text-xs text-red-400 mt-1 hidden">Branch already exists</span>
+          <span id="branch-name-help" class="text-xs text-gray-400 mt-1 block">Custom branch name for worktree (will also be used as session name)</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Coding Agent</label>
+          <select id="coding-agent" class="form-select">
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="skip-permissions" class="form-checkbox" checked />
+            <span class="text-sm text-gray-300">Skip permissions (use --dangerously-skip-permissions)</span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Setup Commands (optional)</label>
+          <textarea id="setup-commands" class="form-input" rows="3" placeholder="Commands to run before starting coding agent (one per line)&#10;e.g., export API_KEY=...&#10;source .env"></textarea>
+          <span class="text-xs text-gray-400 mt-1 block">These commands will be executed in order before the coding agent starts</span>
+        </div>
+
+        <div class="btn-group">
+          <button id="cancel-session" class="btn-secondary">Cancel</button>
+          <button id="create-session" class="btn-primary">Create Session</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project Modal -->
+    <div id="project-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <h2 id="project-modal-title" class="modal-title">Project</h2>
+
+        <div class="form-group" id="project-name-group">
+          <label class="form-label">Name</label>
+          <input type="text" id="project-name" class="form-input" placeholder="e.g., acme" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Directories</label>
+          <div id="project-dir-list" class="project-dir-list"></div>
+          <button id="project-add-folder" class="btn-icon">Add folder</button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Add from parent folder</label>
+          <label class="text-xs text-gray-400 block mb-1">Parent</label>
+          <div class="directory-input-group">
+            <input type="text" id="project-parent" class="form-input" readonly placeholder="Select a directory..." />
+            <button id="project-parent-browse" class="btn-icon">Browse</button>
+          </div>
+          <label class="text-xs text-gray-400 block mb-1 mt-2">Prefix</label>
+          <div class="directory-input-group">
+            <input type="text" id="project-prefix" class="form-input" placeholder="e.g., acme" />
+            <button id="project-scan" class="btn-icon">Scan</button>
+          </div>
+          <div id="project-scan-results" class="project-scan-results hidden"></div>
+          <button id="project-add-selected" class="btn-icon hidden">Add selected</button>
+        </div>
+
+        <div id="project-error" class="text-sm text-red-400 hidden"></div>
+
+        <div class="btn-group">
+          <button id="project-cancel" class="btn-secondary">Cancel</button>
+          <button id="project-save" class="btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCP Server Details Modal -->
+    <div id="mcp-details-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <h2 class="modal-title" id="mcp-details-title">Server Details</h2>
+
+        <div id="mcp-details-content" class="space-y-3 text-sm text-gray-300">
+          <!-- Details will be populated here -->
+        </div>
+
+        <div class="btn-group">
+          <button id="close-mcp-details" class="btn-secondary">Close</button>
+          <button id="remove-mcp-details" class="btn-danger">Remove Server</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCP Server Modal -->
+    <div id="mcp-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <h2 class="modal-title">Add MCP Server</h2>
+
+        <div class="form-group">
+          <label class="form-label">Server Name</label>
+          <input type="text" id="mcp-name" class="form-input" placeholder="e.g., my-server" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Server Type</label>
+          <select id="mcp-type" class="form-select">
+            <option value="local">Local</option>
+            <option value="remote">Remote</option>
+          </select>
+        </div>
+
+        <!-- Local Server Fields -->
+        <div id="local-fields">
+          <div class="form-group">
+            <label class="form-label">Command</label>
+            <input type="text" id="mcp-command" class="form-input" placeholder="e.g., node, npx" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Arguments (space-separated)</label>
+            <input type="text" id="mcp-args" class="form-input" placeholder="e.g., /path/to/server.js or -s @modelcontextprotocol/server-filesystem" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Environment Variables (optional, JSON)</label>
+            <textarea id="mcp-env" class="form-input" rows="3" placeholder='{"API_KEY": "your_api_key"}'></textarea>
+          </div>
+        </div>
+
+        <!-- Remote Server Fields -->
+        <div id="remote-fields" style="display: none;">
+          <div class="form-group">
+            <label class="form-label">Server URL</label>
+            <input type="text" id="mcp-url" class="form-input" placeholder="https://your-server-url.com/mcp" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Headers (optional, JSON)</label>
+            <textarea id="mcp-headers" class="form-input" rows="3" placeholder='{"Authorization": "Bearer your-token"}'></textarea>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Always Allow Tools (optional, comma-separated)</label>
+          <input type="text" id="mcp-always-allow" class="form-input" placeholder="e.g., tool1, tool2, tool3" />
+        </div>
+
+        <div class="btn-group">
+          <button id="cancel-mcp" class="btn-secondary">Cancel</button>
+          <button id="add-mcp" class="btn-primary">Add Server</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <h2 class="modal-title">Terminal Settings</h2>
+
+        <div class="form-group">
+          <label class="form-label">Theme</label>
+          <select id="settings-theme" class="form-select">
+            <option value="vscode-dark">VS Code Dark+</option>
+            <option value="macos-light">macOS Terminal (Light)</option>
+            <option value="macos-dark">macOS Terminal (Dark)</option>
+            <option value="solarized-dark">Solarized Dark</option>
+            <option value="dracula">Dracula</option>
+            <option value="one-dark">One Dark</option>
+            <option value="github-dark">GitHub Dark</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Font Family</label>
+          <select id="settings-font-family" class="form-select">
+            <option value="Menlo, Monaco, 'Courier New', monospace">Menlo</option>
+            <option value="'SF Mono', Monaco, 'Courier New', monospace">SF Mono</option>
+            <option value="Monaco, 'Courier New', monospace">Monaco</option>
+            <option value="'Courier New', Courier, monospace">Courier New</option>
+            <option value="'Source Code Pro', monospace">Source Code Pro</option>
+            <option value="'Fira Code', monospace">Fira Code</option>
+            <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+            <option value="Consolas, monospace">Consolas</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Font Size</label>
+          <input type="number" id="settings-font-size" class="form-input" min="8" max="32" placeholder="11" />
+        </div>
+
+        <div class="form-group">
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="settings-cursor-blink" class="form-checkbox" />
+            <span class="text-sm text-gray-300">Cursor Blink</span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Worktree Root Directory</label>
+          <div class="directory-input-group">
+            <input type="text" id="settings-worktree-dir" class="form-input" readonly placeholder="~/worktrees" />
+            <button id="browse-worktree-dir" class="btn-icon">Browse</button>
+          </div>
+          <span class="text-xs text-gray-400 mt-1 block">Directory where session worktrees will be stored</span>
+        </div>
+
+        <div class="text-center text-xs text-gray-500 mt-6 pt-4 border-t border-gray-700">
+          <span id="app-version">Agentyard v...</span>
+        </div>
+
+        <div class="btn-group">
+          <button id="cancel-settings" class="btn-secondary">Cancel</button>
+          <button id="reset-settings" class="btn-secondary">Reset to Default</button>
+          <button id="save-settings" class="btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Apply to Project Modal -->
+    <div id="apply-to-project-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <h2 class="modal-title">Apply Changes to Project</h2>
+
+        <div class="space-y-3 text-sm text-gray-300">
+          <p>This will apply all changes from this session to the original project directory:</p>
+          <ul class="list-disc list-inside space-y-1 text-gray-400">
+            <li>Branch: <span id="apply-branch-name" class="text-white"></span></li>
+            <li>Parent: <span id="apply-parent-branch" class="text-white"></span></li>
+          </ul>
+          <div class="bg-yellow-900 bg-opacity-30 border border-yellow-700 rounded p-3 mt-3">
+            <p class="text-yellow-300 text-xs">⚠️ This will include all commits and unstaged changes from this branch.</p>
+          </div>
+        </div>
+
+        <div class="btn-group">
+          <button id="cancel-apply-to-project" class="btn-secondary">Cancel</button>
+          <button id="confirm-apply-to-project" class="btn-primary">Apply Changes</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      require('./dist/renderer.js');
+    </script>
+  </body>
+</html>

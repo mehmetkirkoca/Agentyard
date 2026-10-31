@@ -1,0 +1,85 @@
+{
+  "name": "agentyard",
+  "version": "0.1.0",
+  "description": "Run and organize multiple Claude Code sessions side by side",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:css": "npx tailwindcss -i styles.css -o dist/styles.css",
+    "build:ts": "tsc",
+    "build": "npm run build:css && npm run build:ts",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "test": "jest"
+  },
+  "author": {
+    "name": "built-by-as",
+    "email": "hello@example.com"
+  },
+  "contributors": [
+    "Mehmet Kirkoca"
+  ],
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mehmetkirkoca/Agentyard.git"
+  },
+  "homepage": "https://github.com/mehmetkirkoca/Agentyard#readme",
+  "bugs": {
+    "url": "https://github.com/mehmetkirkoca/Agentyard/issues"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.6.2",
+    "@types/uuid": "^10.0.0",
+    "autoprefixer": "^10.4.21",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12",
+    "electron-rebuild": "^3.2.9",
+    "jest": "^30.2.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.18",
+    "ts-jest": "^29.4.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "electron-store": "^11.0.0",
+    "node-pty": "^1.0.0",
+    "simple-git": "^3.28.0",
+    "uuid": "^13.0.0",
+    "xterm": "^5.3.0"
+  },
+  "build": {
+    "appId": "com.agentyard.app",
+    "productName": "Agentyard",
+    "files": [
+      "dist/**/*",
+      "index.html",
+      "node_modules/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
+  }
+}
