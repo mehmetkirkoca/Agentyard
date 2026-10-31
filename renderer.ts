@@ -424,7 +424,9 @@ function createTerminalUI(sessionId: string) {
     container.appendChild(sessionElement);
   }
 
-  term.open(sessionElement);
+  // term.open() waits until renderPanes shows the element: opened inside the hidden
+  // container, xterm measures a 0px cell, so the first fit is skipped and the PTY
+  // keeps its 80x30 spawn size while the terminal shows 80x24.
 
   term.onData((data) => {
     ipcRenderer.send("session-input", sessionId, data);
@@ -2113,6 +2115,8 @@ function renderPanes() {
     if (element) {
       if (element.parentElement !== pane) pane.appendChild(element);
       element.classList.add("active");
+      // First time on screen: open now so xterm measures a real cell size
+      if (session?.terminal && !session.terminal.element) session.terminal.open(element);
     }
     const header = pane.querySelector(".pane-header") as HTMLElement;
     header.draggable = treeLeaves.length > 1;
