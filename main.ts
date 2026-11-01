@@ -16,6 +16,7 @@ import {getBranches, getCurrentBranch} from "./git-utils";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
+import {listSlashCommands, readSessionModel, SessionModel, SlashCommand} from "./prompt-toolbar";
 import {buildForkTranscript} from "./fork-transcript";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {BRACKETED_PASTE_MODE_ENABLE, isTerminalReady} from "./terminal-utils";
@@ -1189,6 +1190,37 @@ ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
   } catch (error) {
     console.error(`Error reading prompts of session ${sessionId}:`, error);
     return promptHistories.get(session.sessionUuid)?.prompts ?? [];
+  }
+});
+
+// Pane toolbar: model and effort of the session's last reply, read from its transcript
+const sessionModels = new Map<string, SessionModel>();
+
+ipcMain.handle("get-session-model", (_event, sessionId: string): {model?: string; effort?: string} => {
+  const session = getPersistedSessions().find(s => s.id === sessionId);
+  if (!session) return {};
+  const file = sessionTranscriptFile(session);
+  if (!file) return {};
+  try {
+    const state = readSessionModel(file, sessionModels.get(session.sessionUuid));
+    sessionModels.set(session.sessionUuid, state);
+    return {model: state.model, effort: state.effort};
+  } catch (error) {
+    console.error(`Error reading the model of session ${sessionId}:`, error);
+    const state = sessionModels.get(session.sessionUuid);
+    return {model: state?.model, effort: state?.effort};
+  }
+});
+
+// Pane toolbar: slash commands and skills available in the session's working directory
+ipcMain.handle("list-slash-commands", (_event, sessionId: string): SlashCommand[] => {
+  const session = getPersistedSessions().find(s => s.id === sessionId);
+  const projectDir = session ? (session.worktreePath || session.linkedDir || session.config.projectDir) : undefined;
+  try {
+    return listSlashCommands({home: os.homedir(), projectDir});
+  } catch (error) {
+    console.error(`Error listing slash commands for session ${sessionId}:`, error);
+    return [];
   }
 });
 

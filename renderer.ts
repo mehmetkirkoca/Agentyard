@@ -7,6 +7,7 @@ import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} fro
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady} from "./terminal-utils";
 import {currentPromptIndex, hasJumpToBottom, seekStep} from "./sticky-prompt";
+import {EFFORT_LEVELS, MODEL_CHOICES, modelLabel, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
 import {
   applyTemplate,
   assignSession,
@@ -1465,7 +1466,6 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
   const header = pane.querySelector(".pane-header") as HTMLElement | null;
   const crumb = header?.querySelector(".pane-breadcrumb") as HTMLElement | null;
   if (!header || !crumb) return;
-  header.querySelectorAll<HTMLElement>(".pane-session-action").forEach(btn => btn.classList.toggle("hidden", !session));
 
   if (!session) {
     if (crumb.dataset.sig === "empty") return;
@@ -1915,6 +1915,7 @@ function createPaneElement(leafId: number): HTMLElement {
     if (sticky && current !== null) scrollPaneToPrompt(sticky, current);
   });
   pane.appendChild(promptLine);
+  pane.appendChild(createPaneToolbar(leafId));
   const placeholder = document.createElement("div");
   placeholder.className = "pane-placeholder";
   pane.appendChild(placeholder);
@@ -1985,8 +1986,6 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
   header.innerHTML = `
     <span class="pane-breadcrumb"></span>
     <span class="pane-header-actions">
-      <button class="pane-action pane-session-action" data-action="attach" title="Attach files or a clipboard image">+</button>
-      <button class="pane-action pane-session-action" data-action="voice" title="Toggle Claude voice mode (/voice)">🎤</button>
       <button class="pane-action" data-action="right" title="Split right">◫</button>
       <button class="pane-action" data-action="down" title="Split down">⬒</button>
       <button class="pane-action" data-action="close" title="Close pane">×</button>
@@ -1996,10 +1995,7 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const action = btn.dataset.action;
-      if (action === "attach" || action === "voice") focusPaneAt(leafId);
-      if (action === "attach") openAttachMenu(btn, leafId);
-      else if (action === "voice") toggleVoiceMode(leafId);
-      else if (action === "close") closePaneAt(leafId);
+      if (action === "close") closePaneAt(leafId);
       else splitPaneWith(leafId, action === "right" ? "right" : "bottom", null);
     });
   });
@@ -2089,6 +2085,293 @@ function toggleVoiceMode(leafId: number) {
   showToast("Toggled Claude voice mode — the terminal shows whether it is on (hold Space to talk)");
 }
 
+// Toolbar at the bottom of each pane, under Claude's own prompt box: attach, voice, slash commands,
+// and the session's model and permission mode. Choices are sent to the terminal (/model, /effort,
+// Shift+Tab); the mode is read back from Claude Code's footer line, the model from the transcript.
+const sessionModes = new Map<string, PermissionMode>();
+const sessionModels = new Map<string, {model?: string; effort?: string}>();
+const modeReadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function createPaneToolbar(leafId: number): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "pane-toolbar hidden";
+  bar.innerHTML = `
+    <button class="pane-action toolbar-btn" data-action="attach" title="Attach files or a clipboard image">+</button>
+    <button class="pane-action toolbar-btn" data-action="voice" title="Toggle Claude voice mode (/voice)">🎤</button>
+    <button class="pane-action toolbar-btn" data-action="commands" title="Slash commands and skills">/</button>
+    <button class="toolbar-chip" data-action="model" title="Model and effort"><span class="chip-main"></span><span class="chip-sub"></span></button>
+    <button class="toolbar-chip" data-action="mode" title="Permission mode (Shift+Tab in the terminal)"><span class="chip-icon"></span><span class="chip-main"></span></button>`;
+  bar.querySelectorAll<HTMLButtonElement>("button").forEach(btn => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault()); // keep the terminal focused
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      focusPaneAt(leafId);
+      const action = btn.dataset.action;
+      if (action === "attach") openAttachMenu(btn, leafId);
+      else if (action === "voice") toggleVoiceMode(leafId);
+      else if (action === "commands") void openCommandMenu(btn, leafId);
+      else if (action === "model") openModelMenu(btn, leafId);
+      else if (action === "mode") openModeMenu(btn, leafId);
+    });
+  });
+  return bar;
+}
+
+function renderPaneToolbar(pane: HTMLElement, leafId: number, shown: boolean) {
+  const bar = pane.querySelector(".pane-toolbar") as HTMLElement | null;
+  if (!bar) return;
+  bar.classList.toggle("hidden", !shown);
+  const session = paneClaudeSession(leafId);
+  bar.querySelectorAll<HTMLButtonElement>("button").forEach(btn => { btn.disabled = !session; });
+
+  const modelChip = bar.querySelector('[data-action="model"]') as HTMLElement;
+  const modeChip = bar.querySelector('[data-action="mode"]') as HTMLElement;
+  const info = session ? sessionModels.get(session.id) : undefined;
+  (modelChip.querySelector(".chip-main") as HTMLElement).textContent = info?.model ? modelLabel(info.model) : "Model";
+  (modelChip.querySelector(".chip-sub") as HTMLElement).textContent = info?.effort ? capitalize(info.effort) : "";
+  const mode = (session && sessionModes.get(session.id)) || "manual";
+  const entry = PERMISSION_MODES.find(m => m.mode === mode) ?? {icon: "⏵", label: mode};
+  (modeChip.querySelector(".chip-icon") as HTMLElement).textContent = entry.icon;
+  (modeChip.querySelector(".chip-main") as HTMLElement).textContent = entry.label;
+  if (session && !sessionModels.has(session.id)) void refreshSessionModel(session.id);
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function renderToolbarsOf(sessionId: string) {
+  paneElements.forEach((pane, leafId) => {
+    if (paneSession(paneState, leafId) !== sessionId) return;
+    renderPaneToolbar(pane, leafId, !!sessions.get(sessionId)?.element?.isConnected);
+  });
+}
+
+async function refreshSessionModel(sessionId: string) {
+  try {
+    const info = await ipcRenderer.invoke("get-session-model", sessionId) as {model?: string; effort?: string};
+    const prev = sessionModels.get(sessionId);
+    // Keep a choice made from the menu until the next reply shows the model in the transcript
+    sessionModels.set(sessionId, {model: info.model ?? prev?.model, effort: info.effort ?? prev?.effort});
+  } catch (error) {
+    console.error(`get-session-model failed for ${sessionId}:`, error);
+    if (!sessionModels.has(sessionId)) sessionModels.set(sessionId, {});
+  }
+  renderToolbarsOf(sessionId);
+}
+
+// The last rows of the screen (not the scrolled viewport): Claude Code's footer with the mode line
+function terminalBottomLines(term: Terminal, count: number): string[] {
+  const buffer = term.buffer.active;
+  const end = buffer.baseY + term.rows;
+  const lines: string[] = [];
+  for (let y = Math.max(0, end - count); y < end; y++) {
+    lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
+  }
+  return lines;
+}
+
+function readSessionMode(sessionId: string): PermissionMode | undefined {
+  const term = sessions.get(sessionId)?.terminal;
+  if (!term || !term.element) return undefined;
+  return parsePermissionMode(terminalBottomLines(term, 4));
+}
+
+// Called on terminal output: re-read the mode once the output has settled
+function scheduleModeRead(sessionId: string) {
+  if (modeReadTimers.has(sessionId)) return;
+  modeReadTimers.set(sessionId, setTimeout(() => {
+    modeReadTimers.delete(sessionId);
+    const mode = readSessionMode(sessionId);
+    if (!mode || sessionModes.get(sessionId) === mode) return;
+    sessionModes.set(sessionId, mode);
+    renderToolbarsOf(sessionId);
+  }, 150));
+}
+
+// Shift+Tab until the footer shows the wanted mode; a mode missing from the cycle stops after one round
+async function setSessionMode(sessionId: string, target: PermissionMode) {
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let i = 0; i <= PERMISSION_MODES.length + 1; i++) {
+    const current = readSessionMode(sessionId);
+    if (current === target) {
+      sessionModes.set(sessionId, current);
+      renderToolbarsOf(sessionId);
+      return;
+    }
+    ipcRenderer.send("session-input", sessionId, "\x1b[Z");
+    await wait(250);
+  }
+  const label = PERMISSION_MODES.find(m => m.mode === target)?.label ?? target;
+  showToast(`"${label}" mode is not available in this session`, "warning");
+  scheduleModeRead(sessionId);
+}
+
+// One open toolbar menu at a time, fixed to the viewport and opening upward from the toolbar
+let toolbarMenu: HTMLElement | null = null;
+let toolbarMenuButton: HTMLElement | null = null;
+
+function closeToolbarMenu() {
+  toolbarMenu?.remove();
+  toolbarMenu = null;
+  toolbarMenuButton = null;
+  document.removeEventListener("mousedown", onToolbarMenuOutside, true);
+  document.removeEventListener("keydown", onToolbarMenuKey, true);
+  window.removeEventListener("blur", closeToolbarMenu);
+  window.removeEventListener("resize", closeToolbarMenu);
+}
+
+function onToolbarMenuOutside(e: MouseEvent) {
+  const target = e.target as Node;
+  if (toolbarMenu?.contains(target) || toolbarMenuButton?.contains(target)) return;
+  closeToolbarMenu();
+}
+
+function onToolbarMenuKey(e: KeyboardEvent) {
+  if (e.key !== "Escape") return;
+  e.stopPropagation();
+  closeToolbarMenu();
+}
+
+/** Opens menu above button; returns false (and closes) when the same button's menu was open. */
+function showToolbarMenu(button: HTMLElement, menu: HTMLElement): boolean {
+  const toggledOff = toolbarMenuButton === button;
+  closeToolbarMenu();
+  if (toggledOff) return false;
+  menu.classList.add("attach-menu", "toolbar-menu");
+  document.body.appendChild(menu);
+  toolbarMenu = menu;
+  toolbarMenuButton = button;
+  const rect = button.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 4);
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(4, rect.top - menu.offsetHeight - 2)}px`;
+  document.addEventListener("mousedown", onToolbarMenuOutside, true);
+  document.addEventListener("keydown", onToolbarMenuKey, true);
+  window.addEventListener("blur", closeToolbarMenu);
+  window.addEventListener("resize", closeToolbarMenu);
+  return true;
+}
+
+function menuHeading(text: string): HTMLElement {
+  const heading = document.createElement("div");
+  heading.className = "toolbar-menu-heading";
+  heading.textContent = text;
+  return heading;
+}
+
+function menuItem(label: string, checked: boolean, run: () => void, hint?: string): HTMLButtonElement {
+  const item = document.createElement("button");
+  item.className = "session-menu-item toolbar-menu-item";
+  item.classList.toggle("checked", checked);
+  const text = document.createElement("span");
+  text.className = "toolbar-menu-label";
+  text.textContent = label;
+  item.appendChild(text);
+  if (hint) {
+    const sub = document.createElement("span");
+    sub.className = "toolbar-menu-hint";
+    sub.textContent = hint;
+    item.appendChild(sub);
+  }
+  item.addEventListener("click", () => {
+    closeToolbarMenu();
+    run();
+  });
+  return item;
+}
+
+function sendToSession(sessionId: string, text: string) {
+  ipcRenderer.send("session-input", sessionId, text);
+  sessions.get(sessionId)?.terminal?.focus();
+}
+
+function openModelMenu(button: HTMLElement, leafId: number) {
+  const session = paneClaudeSession(leafId);
+  if (!session) return;
+  const info = sessionModels.get(session.id) ?? {};
+  const currentLabel = info.model ? modelLabel(info.model) : "";
+  const menu = document.createElement("div");
+  menu.appendChild(menuHeading("Model"));
+  for (const choice of MODEL_CHOICES) {
+    menu.appendChild(menuItem(choice.label, choice.label === currentLabel, () => {
+      sendToSession(session.id, `/model ${choice.alias}\r`);
+      sessionModels.set(session.id, {...info, model: `claude-${choice.label.toLowerCase().replace(/[ .]/g, "-")}`});
+      renderToolbarsOf(session.id);
+    }));
+  }
+  menu.appendChild(menuHeading("Effort"));
+  for (const level of EFFORT_LEVELS) {
+    menu.appendChild(menuItem(capitalize(level), level === info.effort, () => {
+      sendToSession(session.id, `/effort ${level}\r`);
+      sessionModels.set(session.id, {...sessionModels.get(session.id), effort: level});
+      renderToolbarsOf(session.id);
+    }));
+  }
+  showToolbarMenu(button, menu);
+}
+
+function openModeMenu(button: HTMLElement, leafId: number) {
+  const session = paneClaudeSession(leafId);
+  if (!session) return;
+  const current = readSessionMode(session.id) ?? sessionModes.get(session.id) ?? "manual";
+  const menu = document.createElement("div");
+  menu.appendChild(menuHeading("Permission mode"));
+  for (const entry of PERMISSION_MODES) {
+    menu.appendChild(menuItem(`${entry.icon}  ${entry.label}`, entry.mode === current, () => {
+      void setSessionMode(session.id, entry.mode);
+      session.terminal?.focus();
+    }));
+  }
+  showToolbarMenu(button, menu);
+}
+
+// Searchable list; picking one types "/name " into Claude's prompt without sending it
+async function openCommandMenu(button: HTMLElement, leafId: number) {
+  const session = paneClaudeSession(leafId);
+  if (!session) return;
+  if (toolbarMenuButton === button) {
+    closeToolbarMenu();
+    return;
+  }
+  let commands: SlashCommand[] = [];
+  try {
+    commands = await ipcRenderer.invoke("list-slash-commands", session.id) as SlashCommand[];
+  } catch (error) {
+    showToast(`list-slash-commands failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return;
+  }
+  const menu = document.createElement("div");
+  menu.classList.add("command-menu");
+  const search = document.createElement("input");
+  search.className = "command-menu-search";
+  search.placeholder = "Search commands and skills…";
+  const list = document.createElement("div");
+  list.className = "command-menu-list";
+  menu.append(search, list);
+  const pick = (name: string) => {
+    closeToolbarMenu();
+    sendToSession(session.id, `/${name} `);
+  };
+  const renderList = () => {
+    const query = search.value.trim().toLowerCase();
+    list.replaceChildren();
+    const matches = commands.filter(c => !query || c.name.toLowerCase().includes(query) || c.description.toLowerCase().includes(query));
+    for (const command of matches) list.appendChild(menuItem(`/${command.name}`, false, () => pick(command.name), command.description));
+    if (matches.length === 0) list.appendChild(menuHeading("No matching command"));
+  };
+  search.addEventListener("input", renderList);
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const query = search.value.trim().toLowerCase();
+    const first = commands.find(c => !query || c.name.toLowerCase().includes(query) || c.description.toLowerCase().includes(query));
+    if (first) pick(first.name);
+  });
+  renderList();
+  if (showToolbarMenu(button, menu)) search.focus();
+}
+
 // "+" dropdown, fixed to the viewport so the pane's overflow does not clip it
 let attachMenu: HTMLElement | null = null;
 
@@ -2141,7 +2424,9 @@ function openAttachMenu(button: HTMLElement, leafId: number) {
   const rect = button.getBoundingClientRect();
   const left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 4);
   menu.style.left = `${Math.max(4, left)}px`;
-  menu.style.top = `${rect.bottom + 2}px`;
+  // The "+" sits in the pane's bottom toolbar: open upward when there is no room below
+  const below = rect.bottom + 2;
+  menu.style.top = `${below + menu.offsetHeight > window.innerHeight ? Math.max(4, rect.top - menu.offsetHeight - 2) : below}px`;
   document.addEventListener("mousedown", onAttachMenuOutside, true);
   document.addEventListener("keydown", onAttachMenuKey, true);
   window.addEventListener("blur", closeAttachMenu);
@@ -2351,10 +2636,7 @@ function renderPanes() {
     header.title = treeLeaves.length > 1 ? "Drag onto another pane: center swaps, edges move it there" : "";
     renderPaneBreadcrumb(pane, leafNode.id, session);
     renderPanePrompt(pane, session?.id);
-    const canAttach = !!paneClaudeSession(leafNode.id);
-    header.querySelectorAll<HTMLButtonElement>(".pane-session-action").forEach(btn => {
-      btn.disabled = !canAttach;
-    });
+    renderPaneToolbar(pane, leafNode.id, !!element);
     const placeholder = pane.querySelector(".pane-placeholder") as HTMLElement;
     placeholder.classList.toggle("hidden", !!element);
     placeholder.classList.toggle("reopen", !element && !!session);
@@ -2703,6 +2985,7 @@ ipcRenderer.on("session-output", (_event, sessionId: string, data: string) => {
     const filteredData = data.replace(/\x1b\[3J/g, '');
 
     session.terminal.write(filteredData);
+    if (session.config.codingAgent === "claude") scheduleModeRead(sessionId);
 
     // Only mark as unread/activity if this is not the active session
     if (session.config.codingAgent !== "claude" && !isShownInPane(sessionId) && session.hasActivePty) {
@@ -2734,6 +3017,7 @@ ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStat
   if (!session) return;
   session.status = status;
   session.meta = { ...session.meta, status };
+  if (session.config.codingAgent === "claude") void refreshSessionModel(sessionId);
   refreshSessionIndicator(sessionId);
   applyTabStatus(sessionId);
   renderSidebar();
@@ -2798,6 +3082,8 @@ ipcRenderer.on("session-deleted", (_event, sessionId: string) => {
     document.getElementById(`tab-${sessionId}`)?.remove();
     document.getElementById(`sidebar-${sessionId}`)?.remove();
     sessions.delete(sessionId);
+    sessionModes.delete(sessionId);
+    sessionModels.delete(sessionId);
     renderSidebar();
     if (dirPickerSessionId === sessionId) closeDirPicker();
     dropSessionFromPanes(sessionId);

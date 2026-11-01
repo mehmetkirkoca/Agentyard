@@ -942,6 +942,117 @@ body {
     top: 44px; /* pane header + prompt line */
   }
 
+  .pane > .session-wrapper {
+    bottom: 20px; /* pane toolbar */
+  }
+
+  /* Thin bar under Claude's prompt box, set off from the terminal by a faint top border */
+  .pane-toolbar {
+    @apply absolute left-0 right-0 bottom-0 flex items-center select-none;
+    height: 20px;
+    gap: 2px;
+    padding: 0 4px;
+    font-size: 11px;
+    background-color: var(--vsc-sidebar);
+    border-top: 1px solid var(--vsc-border-strong);
+  }
+
+  .pane-toolbar.hidden {
+    display: none;
+  }
+
+  .pane-toolbar .toolbar-btn {
+    width: 18px;
+    height: 16px;
+    font-size: 12px;
+  }
+
+  .pane-toolbar .toolbar-btn[data-action="voice"] {
+    font-size: 10px;
+  }
+
+  .toolbar-chip {
+    @apply flex items-center cursor-pointer;
+    height: 16px;
+    gap: 4px;
+    padding: 0 5px;
+    border-radius: 3px;
+    color: var(--vsc-fg);
+    white-space: nowrap;
+  }
+
+  .toolbar-chip:hover {
+    background-color: rgba(90, 93, 94, 0.31);
+    color: var(--vsc-fg-strong);
+  }
+
+  .toolbar-chip:disabled {
+    @apply cursor-default;
+    opacity: 0.35;
+  }
+
+  .toolbar-chip .chip-sub {
+    color: var(--vsc-fg-muted);
+  }
+
+  .toolbar-chip .chip-sub:empty {
+    display: none;
+  }
+
+  .toolbar-menu-heading {
+    padding: 4px 12px 2px;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--vsc-fg-muted);
+  }
+
+  .toolbar-menu-item.checked::after {
+    content: "✓";
+    margin-left: auto;
+    padding-left: 12px;
+  }
+
+  .toolbar-menu-item {
+    display: flex !important;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* The name stays on one line; the description takes the rest and is cut with an ellipsis */
+  .toolbar-menu-label {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .toolbar-menu-hint {
+    @apply truncate;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .command-menu {
+    width: 560px;
+    max-width: calc(100vw - 8px);
+  }
+
+  .command-menu-search {
+    width: calc(100% - 12px);
+    margin: 2px 6px 4px;
+    padding: 3px 6px;
+    font-size: 12px;
+    color: var(--vsc-fg);
+    background-color: var(--vsc-input);
+    border: 1px solid var(--vsc-focus);
+    outline: none;
+  }
+
+  .command-menu-list {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
   /* Prompt line under the pane header: the question whose answer is at the top of the terminal */
   .pane-prompt {
     @apply absolute left-0 right-0 flex items-center select-none;
