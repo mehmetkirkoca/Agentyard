@@ -4,6 +4,9 @@ import * as path from "path";
 import {execFileSync} from "child_process";
 import {
   adoptAgyConversation,
+  agySessionName,
+  parseAgyAnnotationTitle,
+  readAgyTitle,
   agyPromptsOf,
   AGY_STATUS_ENV,
   agyTranscriptPath,
@@ -301,5 +304,55 @@ describe("adoptAgyConversation", () => {
   it("does not let a fork take over the original's conversation", () => {
     // /fork was not sent: agy reports the original's id
     expect(adoptAgyConversation(fork, A)).toEqual(fork);
+  });
+});
+
+describe("parseAgyAnnotationTitle", () => {
+  // annotations/<id>.pbtxt as agy writes them (prototext, one line)
+  it("reads the title, Turkish characters as they are", () => {
+    expect(parseAgyAnnotationTitle('title:"Google Analytics Entegrasyonu Nasıl Yapılır" last_user_view_time:{seconds:1791975259 nanos:391000000}'))
+      .toBe("Google Analytics Entegrasyonu Nasıl Yapılır");
+  });
+
+  it("unescapes quotes, backslashes and octal UTF-8 bytes", () => {
+    expect(parseAgyAnnotationTitle('title:"Say \\"hi\\" \\\\ m\\303\\274\\305\\237teri"')).toBe('Say "hi" \\ müşteri');
+  });
+
+  it("is undefined without a title", () => {
+    expect(parseAgyAnnotationTitle("last_user_view_time:{seconds:1}")).toBeUndefined();
+    expect(parseAgyAnnotationTitle('title:""')).toBeUndefined();
+  });
+});
+
+describe("readAgyTitle", () => {
+  let home: string;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "agy-title-"));
+  });
+  afterEach(() => {
+    fs.rmSync(home, {recursive: true, force: true});
+  });
+
+  it("reads annotations/<conversation id>.pbtxt, or nothing when it is missing", () => {
+    const id = "a071ac23-7cf6-4566-88bb-a9d278961012";
+    expect(readAgyTitle(id, home)).toBeUndefined();
+    const file = path.join(home, ".gemini/antigravity-cli/annotations", `${id}.pbtxt`);
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, 'title:"Run Agy-Test.txt Shell Command"\n');
+    expect(readAgyTitle(id, home)).toBe("Run Agy-Test.txt Shell Command");
+    expect(readAgyTitle(undefined, home)).toBeUndefined();
+  });
+});
+
+describe("agySessionName", () => {
+  const session = {agentConversationId: "c"};
+  it("prefers agy's title, then the first prompt, as one line of at most 60 characters", () => {
+    expect(agySessionName(session, [], () => "Fix the  login\nbug", () => ["first"])).toBe("Fix the login bug");
+    expect(agySessionName(session, [], () => undefined, () => ["add tests for the parser"])).toBe("add tests for the parser");
+    expect(agySessionName(session, [], () => "x".repeat(80), () => [])).toHaveLength(60);
+  });
+
+  it("is undefined before the first prompt", () => {
+    expect(agySessionName({}, [], () => undefined, () => [])).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {HookEvent} from "./session-status";
+import {resolveSessionTitle} from "./transcript-meta";
 
 /**
  * The agy binary to run. ~/.gemini/bin/agy is the self-updating install (1.4.12+); an agy found
@@ -106,6 +107,70 @@ export function agyPromptsOf(
   const original = sessions.find(s => s.agentConversationId === session.forkedFrom);
   const inherited = original ? agyPromptsOf(original, sessions, read, depth + 1) : read(session.forkedFrom);
   return [...inherited.slice(0, session.forkedPromptCount), ...own];
+}
+
+const SIMPLE_ESCAPES: Record<string, string> = {n: "\n", t: "\t", r: "\r", '"': '"', "'": "'", "\\": "\\"};
+
+/**
+ * The title in an agy annotations file (protobuf text: `title:"…" last_user_view_time:{…}`).
+ * Escapes are decoded as bytes, so octal/hex-escaped UTF-8 comes out as the characters it encodes.
+ */
+export function parseAgyAnnotationTitle(text: string): string | undefined {
+  const match = /(?:^|\s)title:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (!match) return undefined;
+  const raw = match[1];
+  const bytes: number[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== "\\") {
+      bytes.push(...Buffer.from(raw[i], "utf8"));
+      continue;
+    }
+    const next = raw[++i];
+    const octal = /^[0-7]{1,3}/.exec(raw.slice(i));
+    const hex = next === "x" ? /^[0-9a-fA-F]{1,2}/.exec(raw.slice(i + 1)) : null;
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8) & 0xff);
+      i += octal[0].length - 1;
+    } else if (hex) {
+      bytes.push(parseInt(hex[0], 16));
+      i += hex[0].length;
+    } else {
+      bytes.push(...Buffer.from(SIMPLE_ESCAPES[next] ?? next ?? "", "utf8"));
+    }
+  }
+  const title = Buffer.from(bytes).toString("utf8").trim();
+  return title || undefined;
+}
+
+/** The title agy gave a conversation (~/.gemini/antigravity-cli/annotations/<id>.pbtxt), if any yet. */
+export function readAgyTitle(conversationId: string | undefined, home: string = os.homedir()): string | undefined {
+  if (!isAgyConversationId(conversationId)) return undefined;
+  const file = path.join(home, ".gemini", "antigravity-cli", "annotations", `${conversationId}.pbtxt`);
+  try {
+    return parseAgyAnnotationTitle(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`Error reading agy title ${file}:`, error);
+    return undefined;
+  }
+}
+
+/**
+ * The automatic name of an agy session, as for Claude: agy's own title of the conversation, else its
+ * first prompt; one line of at most 60 characters. Undefined before the first prompt.
+ */
+export function agySessionName(
+  session: AgyForkInfo,
+  sessions: AgyForkInfo[],
+  readTitle: (conversationId: string | undefined) => string | undefined = id => readAgyTitle(id),
+  readPrompts: (conversationId: string | undefined) => string[] = id => readAgyPrompts(id),
+): string | undefined {
+  return resolveSessionTitle({
+    uuid: "",
+    size: 0,
+    mtimeMs: 0,
+    aiTitle: readTitle(session.agentConversationId),
+    firstPrompt: agyPromptsOf(session, sessions, readPrompts)[0],
+  });
 }
 
 /** What agy shows above an approval prompt ("Requesting permission for:\n   <command>\nRun this command?"). */

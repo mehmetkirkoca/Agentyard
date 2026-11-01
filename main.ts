@@ -11,7 +11,7 @@ import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
 import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
-import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, buildAgyCommand, createAgyWaitingDetector, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
+import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agySessionName, buildAgyCommand, createAgyWaitingDetector, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
 import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity-screen";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
@@ -367,12 +367,13 @@ function syncTranscripts(): void {
       nextNumber: () => number++,
     });
 
-    if (result.changed) savePersistedSessions(result.sessions);
+    const agyRenamed = renameAgySessions(result.sessions);
+    if (result.changed || agyRenamed) savePersistedSessions(result.sessions);
     // A failed tick knows nothing about open transcripts: keep the previous state.
     const externallyOpen = result.failed ? lastExternallyOpen : result.externallyOpen;
     const openChanged = !sameSet(externallyOpen, lastExternallyOpen);
     lastExternallyOpen = externallyOpen;
-    if ((result.changed || openChanged) && mainWindow && !mainWindow.isDestroyed()) {
+    if ((result.changed || agyRenamed || openChanged) && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(
         "sessions-updated",
         result.sessions,
@@ -398,6 +399,22 @@ function syncTranscripts(): void {
   } finally {
     syncRunning = false;
   }
+}
+
+// Antigravity sessions named automatically (not renamed by the user) follow agy's conversation
+// title, else their first prompt. Agy sessions from before automatic names have no flag; they are
+// automatic too. Updates sessions in place; true when a name changed.
+function renameAgySessions(sessions: PersistedSession[]): boolean {
+  let changed = false;
+  for (const session of sessions) {
+    if (session.config.codingAgent !== "antigravity" || session.manualName === true) continue;
+    const name = agySessionName(session, sessions);
+    if (name && name !== session.name) {
+      session.name = name;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function startTranscriptSync(): void {
@@ -1091,6 +1108,13 @@ ipcMain.on("create-session", async (event, request: SessionConfig & {projectId?:
     };
 
     persistedSession.projectId = requestedProjectId ?? findProjectForDir(getProjects(), config.projectDir)?.id;
+
+    // Like Claude's, an Antigravity session takes its name from the conversation (agy's title)
+    if (config.codingAgent === "antigravity") {
+      persistedSession.origin = "agentyard";
+      persistedSession.manualName = false;
+      persistedSession.lastActivity = Date.now();
+    }
 
     if (isLocalClaude(persistedSession)) {
       persistedSession.origin = "agentyard";
