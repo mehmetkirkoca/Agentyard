@@ -1,6 +1,6 @@
 # Agentyard
 
-Agentyard is a desktop app (Electron + TypeScript) for running and organizing many Claude Code sessions side by side. Sessions are grouped into projects that can span several working directories, every conversation is kept in one central transcript store, and the terminals can be arranged in a split-pane layout so several agents stay visible at once.
+Agentyard is a desktop app (Electron + TypeScript) for running and organizing many Claude Code and Gemini sessions side by side. Sessions are grouped into projects that can span several working directories, every conversation is kept in one central transcript store, and the terminals can be arranged in a split-pane layout so several agents stay visible at once.
 
 > **Fork of FleetCode.** Agentyard is a fork of [FleetCode](https://github.com/built-by-as/FleetCode) by built-by-as (Amrit Subramanian), based on FleetCode v1.0.1-beta.8 (commit 1cb4afd). Many thanks to the original author; the original project is linked here for reference.
 
@@ -8,6 +8,7 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 
 - **Projects with multiple working directories**: a project owns one or more directories; each session runs in one chosen directory, and directories already used by another session are locked in the picker.
 - **Others (standalone sessions)**: sessions that do not belong to any project, shown in their own section.
+- **Multiple Coding Agents**: run Claude Code, Gemini CLI, or Codex in your project workspaces and worktrees.
 - **Central transcript store**: conversations live in `~/.agentyard/sessions/`; the session directory's `~/.claude/projects` folder contains a symlink to them, so a session can switch directories without losing its history. Existing Claude Code conversations found in `~/.claude/projects` are imported continuously.
 - **Status dots via hooks**: running, waiting for approval, done, closed, and open elsewhere, with a per-project "n waiting" counter. The hook settings are passed to `claude` via `--settings`; the global `~/.claude/settings.json` is never modified.
 - **Fork**: start a new session as a copy of an existing conversation.
@@ -24,7 +25,7 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 
 - Node.js 18+
 - Git
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` on your `PATH`)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` on your `PATH`) and/or Gemini CLI (`gemini` on your `PATH`)
 
 ## Development
 

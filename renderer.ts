@@ -7,7 +7,7 @@ import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} fro
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady} from "./terminal-utils";
 import {currentPromptIndex, hasJumpToBottom, seekStep} from "./sticky-prompt";
-import {EFFORT_LEVELS, MODEL_CHOICES, modelLabel, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
+import {EFFORT_LEVELS, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
 import {
   applyTemplate,
   assignSession,
@@ -637,6 +637,15 @@ function createTerminalUI(sessionId: string) {
 
   term.onData((data) => {
     ipcRenderer.send("session-input", sessionId, data);
+    if (data.includes("\r")) {
+      const s = sessions.get(sessionId);
+      if (s?.config.codingAgent === "gemini") {
+        setTimeout(() => {
+          stickyPrompts.get(sessionId)?.refreshPrompts();
+          void refreshSessionModel(sessionId);
+        }, 800);
+      }
+    }
   });
 
   // Listen for bell character to mark unread activity
@@ -779,7 +788,7 @@ function showToast(message: string, kind: ToastKind = "info"): void {
 function addToSidebar(list: HTMLElement, sessionId: string, name: string, config: SessionConfig) {
   const isWorktree = config.sessionType === SessionType.WORKTREE;
   const applyMenuItem = isWorktree ? `<button class="session-menu-item apply-to-project-btn" data-id="${sessionId}">Apply to project</button>` : '';
-  const skipMenuItem = config.codingAgent === "claude"
+  const skipMenuItem = (config.codingAgent === "claude" || config.codingAgent === "gemini")
     ? `<button class="session-menu-item skip-permissions-btn" data-id="${sessionId}">Skip permissions: ${config.skipPermissions ? "on" : "off"}</button>`
     : '';
   const sess = sessions.get(sessionId);
@@ -2023,11 +2032,12 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
   return header;
 }
 
-// Attachments and voice: only for a live Claude session shown in the pane
+// Attachments and voice: only for a live Claude or Gemini session shown in the pane
 function paneClaudeSession(leafId: number): Session | null {
   const id = paneSession(paneState, leafId);
   const session = id ? sessions.get(id) : undefined;
-  if (!session || !session.terminal || !session.hasActivePty || session.config.codingAgent !== "claude") return null;
+  if (!session || !session.terminal || !session.hasActivePty) return null;
+  if (session.config.codingAgent !== "claude" && session.config.codingAgent !== "gemini") return null;
   return session;
 }
 
@@ -2124,13 +2134,15 @@ function renderPaneToolbar(pane: HTMLElement, leafId: number, shown: boolean) {
   const session = paneClaudeSession(leafId);
   bar.querySelectorAll<HTMLButtonElement>("button").forEach(btn => { btn.disabled = !session; });
 
+  const isGemini = session?.config.codingAgent === "gemini";
   const modelChip = bar.querySelector('[data-action="model"]') as HTMLElement;
   const modeChip = bar.querySelector('[data-action="mode"]') as HTMLElement;
   const info = session ? sessionModels.get(session.id) : undefined;
   (modelChip.querySelector(".chip-main") as HTMLElement).textContent = info?.model ? modelLabel(info.model) : "Model";
   (modelChip.querySelector(".chip-sub") as HTMLElement).textContent = info?.effort ? capitalize(info.effort) : "";
-  const mode = (session && sessionModes.get(session.id)) || "manual";
-  const entry = PERMISSION_MODES.find(m => m.mode === mode) ?? {icon: "⏵", label: mode};
+  const mode = (session && sessionModes.get(session.id)) || (isGemini ? "default" : "manual");
+  const modesList = isGemini ? (GEMINI_PERMISSION_MODES as any[]) : PERMISSION_MODES;
+  const entry = modesList.find((m: any) => m.mode === mode) ?? {icon: "⏵", label: mode};
   (modeChip.querySelector(".chip-icon") as HTMLElement).textContent = entry.icon;
   (modeChip.querySelector(".chip-main") as HTMLElement).textContent = entry.label;
   if (session && !sessionModels.has(session.id)) void refreshSessionModel(session.id);
@@ -2289,24 +2301,28 @@ function sendToSession(sessionId: string, text: string) {
 function openModelMenu(button: HTMLElement, leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
+  const isGemini = session.config.codingAgent === "gemini";
   const info = sessionModels.get(session.id) ?? {};
   const currentLabel = info.model ? modelLabel(info.model) : "";
   const menu = document.createElement("div");
   menu.appendChild(menuHeading("Model"));
-  for (const choice of MODEL_CHOICES) {
+  const choices = isGemini ? GEMINI_MODEL_CHOICES : MODEL_CHOICES;
+  for (const choice of choices) {
     menu.appendChild(menuItem(choice.label, choice.label === currentLabel, () => {
       sendToSession(session.id, `/model ${choice.alias}\r`);
-      sessionModels.set(session.id, {...info, model: `claude-${choice.label.toLowerCase().replace(/[ .]/g, "-")}`});
+      sessionModels.set(session.id, {...info, model: choice.alias});
       renderToolbarsOf(session.id);
     }));
   }
-  menu.appendChild(menuHeading("Effort"));
-  for (const level of EFFORT_LEVELS) {
-    menu.appendChild(menuItem(capitalize(level), level === info.effort, () => {
-      sendToSession(session.id, `/effort ${level}\r`);
-      sessionModels.set(session.id, {...sessionModels.get(session.id), effort: level});
-      renderToolbarsOf(session.id);
-    }));
+  if (!isGemini) {
+    menu.appendChild(menuHeading("Effort"));
+    for (const level of EFFORT_LEVELS) {
+      menu.appendChild(menuItem(capitalize(level), level === info.effort, () => {
+        sendToSession(session.id, `/effort ${level}\r`);
+        sessionModels.set(session.id, {...sessionModels.get(session.id), effort: level});
+        renderToolbarsOf(session.id);
+      }));
+    }
   }
   showToolbarMenu(button, menu);
 }
@@ -2314,6 +2330,22 @@ function openModelMenu(button: HTMLElement, leafId: number) {
 function openModeMenu(button: HTMLElement, leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
+  const isGemini = session.config.codingAgent === "gemini";
+  if (isGemini) {
+    const current = sessionModes.get(session.id) ?? "default";
+    const menu = document.createElement("div");
+    menu.appendChild(menuHeading("Approval mode"));
+    for (const entry of GEMINI_PERMISSION_MODES) {
+      menu.appendChild(menuItem(`${entry.icon}  ${entry.label}`, entry.mode === current, () => {
+        sessionModes.set(session.id, entry.mode as any);
+        sendToSession(session.id, `/settings approval-mode ${entry.mode}\r`);
+        session.terminal?.focus();
+        renderToolbarsOf(session.id);
+      }));
+    }
+    showToolbarMenu(button, menu);
+    return;
+  }
   const current = readSessionMode(session.id) ?? sessionModes.get(session.id) ?? "manual";
   const menu = document.createElement("div");
   menu.appendChild(menuHeading("Permission mode"));
@@ -2887,6 +2919,7 @@ function switchToSession(sessionId: string) {
   if (!session || !session.element || !session.terminal || !session.fitAddon) return;
   commitPanes(showSession(paneState, sessionId));
   syncActiveSession(true);
+  stickyPrompts.get(sessionId)?.refreshPrompts();
 }
 
 function closeSession(sessionId: string) {
@@ -2986,6 +3019,11 @@ ipcRenderer.on("session-output", (_event, sessionId: string, data: string) => {
 
     session.terminal.write(filteredData);
     if (session.config.codingAgent === "claude") scheduleModeRead(sessionId);
+    if (session.config.codingAgent === "gemini") {
+      const sticky = stickyPrompts.get(sessionId);
+      if (sticky) sticky.refreshPrompts();
+      void refreshSessionModel(sessionId);
+    }
 
     // Only mark as unread/activity if this is not the active session
     if (session.config.codingAgent !== "claude" && !isShownInPane(sessionId) && session.hasActivePty) {
@@ -3017,7 +3055,7 @@ ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStat
   if (!session) return;
   session.status = status;
   session.meta = { ...session.meta, status };
-  if (session.config.codingAgent === "claude") void refreshSessionModel(sessionId);
+  if (session.config.codingAgent === "claude" || session.config.codingAgent === "gemini") void refreshSessionModel(sessionId);
   refreshSessionIndicator(sessionId);
   applyTabStatus(sessionId);
   renderSidebar();
@@ -3200,13 +3238,22 @@ branchNameInput?.addEventListener("input", () => {
   validateBranchName();
 });
 
-// Toggle skip permissions checkbox visibility based on coding agent
-codingAgentSelect?.addEventListener("change", () => {
-  if (codingAgentSelect.value === "claude") {
+function updateSkipPermissionsVisibility(agent: string) {
+  const label = document.getElementById("skip-permissions-label");
+  if (agent === "claude") {
     skipPermissionsGroup?.classList.remove("hidden");
+    if (label) label.textContent = "Skip permissions (use --dangerously-skip-permissions)";
+  } else if (agent === "gemini") {
+    skipPermissionsGroup?.classList.remove("hidden");
+    if (label) label.textContent = "Skip permissions (use --yolo)";
   } else {
     skipPermissionsGroup?.classList.add("hidden");
   }
+}
+
+// Toggle skip permissions checkbox visibility and label based on coding agent
+codingAgentSelect?.addEventListener("change", () => {
+  updateSkipPermissionsVisibility(codingAgentSelect.value);
 });
 
 // Toggle parent branch and branch name visibility based on session type
@@ -3281,11 +3328,7 @@ async function openNewSessionDialog(projectId?: string): Promise<void> {
   }
 
   // Show/hide skip permissions based on coding agent
-  if (lastSettings.codingAgent === "codex") {
-    skipPermissionsGroup?.classList.add("hidden");
-  } else {
-    skipPermissionsGroup?.classList.remove("hidden");
-  }
+  updateSkipPermissionsVisibility(codingAgentSelect.value);
 }
 
 // Guards against out-of-order dir-info responses
@@ -3437,7 +3480,7 @@ createBtn?.addEventListener("click", () => {
     parentBranch: sessionType === SessionType.WORKTREE ? parentBranchSelect.value : undefined,
     branchName,
     codingAgent: codingAgentSelect.value,
-    skipPermissions: codingAgentSelect.value === "claude" ? skipPermissionsCheckbox.checked : false,
+    skipPermissions: (codingAgentSelect.value === "claude" || codingAgentSelect.value === "gemini") ? skipPermissionsCheckbox.checked : false,
     setupCommands,
   };
 

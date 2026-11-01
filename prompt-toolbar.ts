@@ -42,10 +42,31 @@ export const MODEL_CHOICES: {alias: string; label: string}[] = [
   {alias: "haiku", label: "Haiku 5.5"},
 ];
 
+export const GEMINI_MODEL_CHOICES: {alias: string; label: string}[] = [
+  {alias: "gemini-2.5-pro", label: "Gemini 2.5 Pro"},
+  {alias: "gemini-2.5-flash", label: "Gemini 2.5 Flash"},
+  {alias: "gemini-2.5-flash-thinking", label: "Gemini 2.5 Flash Thinking"},
+  {alias: "gemini-1.5-pro", label: "Gemini 1.5 Pro"},
+  {alias: "gemini-1.5-flash", label: "Gemini 1.5 Flash"},
+];
+
+export const GEMINI_PERMISSION_MODES: {mode: string; label: string; icon: string}[] = [
+  {mode: "default", label: "Default", icon: "✋"},
+  {mode: "auto_edit", label: "Auto Edit", icon: "✎"},
+  {mode: "yolo", label: "YOLO", icon: "⏵⏵"},
+  {mode: "plan", label: "Plan", icon: "⏸"},
+];
+
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
 /** "claude-opus-5-5" -> "Opus 5.5"; unknown ids are returned unchanged. */
 export function modelLabel(id: string): string {
+  if (id.toLowerCase().startsWith("gemini")) {
+    return id
+      .split("-")
+      .map(part => (part.toLowerCase() === "gemini" ? "Gemini" : part.charAt(0).toUpperCase() + part.slice(1)))
+      .join(" ");
+  }
   const match = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(id);
   if (!match) return id;
   const family = match[1].charAt(0).toUpperCase() + match[1].slice(1);
@@ -220,5 +241,30 @@ export function listSlashCommands(opts: {home: string; projectDir?: string}): Sl
   for (const [plugin, dir] of enabledPluginDirs(opts.home)) add(commandsUnder(dir, `${plugin}:`, "plugin"));
   add(commandsUnder(path.join(opts.home, ".claude"), "", "user"));
   if (opts.projectDir) add(commandsUnder(path.join(opts.projectDir, ".claude"), "", "project"));
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export const GEMINI_BUILT_IN_COMMANDS: [string, string][] = [
+  ["help", "Show help and available commands"],
+  ["model", "Choose Gemini model"],
+  ["clear", "Clear conversation history"],
+  ["resume", "Browse and resume sessions"],
+  ["settings", "View and edit settings"],
+  ["mcp", "Manage MCP servers"],
+  ["compress", "Compress conversation context"],
+  ["auth", "Manage authentication"],
+  ["stats", "Show token usage statistics"],
+  ["memory", "Edit project memory"],
+  ["tools", "Show available tools"],
+  ["skills", "Manage agent skills"],
+  ["hooks", "Manage Gemini hooks"],
+];
+
+export function listGeminiSlashCommands(opts: {home: string; projectDir?: string}): SlashCommand[] {
+  const byName = new Map<string, SlashCommand>();
+  const add = (list: SlashCommand[]) => list.forEach(c => byName.set(c.name, c));
+  add(GEMINI_BUILT_IN_COMMANDS.map(([name, description]) => ({name, description, source: "built-in" as const})));
+  add(commandsUnder(path.join(opts.home, ".gemini"), "", "user"));
+  if (opts.projectDir) add(commandsUnder(path.join(opts.projectDir, ".gemini"), "", "project"));
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }

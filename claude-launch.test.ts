@@ -15,6 +15,12 @@ describe("buildPtyEnv", () => {
     expect(env.AGENTYARD_SESSION_ID).toBe("s1");
   });
 
+  it("strips npm_config_prefix so NVM loads properly", () => {
+    const env = buildPtyEnv({npm_config_prefix: "/usr/local", NPM_CONFIG_PREFIX: "/usr/local"}, "s1");
+    expect(env.npm_config_prefix).toBeUndefined();
+    expect(env.NPM_CONFIG_PREFIX).toBeUndefined();
+  });
+
   it("keeps user CLAUDE_CODE_ vars", () => {
     const env = buildPtyEnv({CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_API_KEY: "x", CLAUDECODE: "1"}, "s1");
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBe("1");

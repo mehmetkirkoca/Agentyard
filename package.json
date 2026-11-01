@@ -1,10 +1,10 @@
 {
   "name": "agentyard",
   "version": "0.1.0",
-  "description": "Run and organize multiple Claude Code sessions side by side",
+  "description": "Run and organize multiple Claude Code and Gemini sessions side by side",
   "main": "dist/main.js",
   "scripts": {
-    "build:css": "npx tailwindcss -i styles.css -o dist/styles.css",
+    "build:css": "tailwindcss -i styles.css -o dist/styles.css",
     "build:ts": "tsc",
     "build": "npm run build:css && npm run build:ts",
     "start": "npm run build && electron .",

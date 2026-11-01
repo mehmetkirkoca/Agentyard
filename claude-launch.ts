@@ -13,6 +13,8 @@ export const INHERITED_CLAUDE_ENV_KEYS: readonly string[] = [
   "CLAUDE_CODE_SESSION_ATTENDED",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_EXECPATH",
+  "npm_config_prefix",
+  "NPM_CONFIG_PREFIX",
 ];
 
 export function buildPtyEnv(base: NodeJS.ProcessEnv, appSessionId: string): NodeJS.ProcessEnv {

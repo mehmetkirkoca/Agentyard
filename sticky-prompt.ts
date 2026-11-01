@@ -1,5 +1,5 @@
-/** Claude Code echoes each submitted prompt as "❯ <first line>"; the input box uses the same glyph. */
 export const PROMPT_GLYPH = "❯ ";
+export const PROMPT_GLYPHS = ["❯ ", "> ", "✦ "];
 
 export interface PromptRow {
   /** screen row of the echoed prompt */
@@ -21,8 +21,9 @@ export function findPromptRows(lines: string[], prompts: string[]): PromptRow[] 
   let cursor = prompts.length - 1;
   for (let row = lines.length - 1; row >= 0 && cursor >= 0; row--) {
     const line = lines[row];
-    if (!line.startsWith(PROMPT_GLYPH)) continue;
-    const echoed = normalize(line.slice(PROMPT_GLYPH.length));
+    const matchedGlyph = PROMPT_GLYPHS.find(g => line.startsWith(g));
+    if (!matchedGlyph) continue;
+    const echoed = normalize(line.slice(matchedGlyph.length));
     if (!echoed) continue;
     let index = -1;
     for (let i = cursor; i >= 0 && index < 0; i--) {

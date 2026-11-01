@@ -63,15 +63,19 @@ describe("assignProjects", () => {
     const other = makeSession("c", "/w/x", {
       config: { projectDir: "/w/x", sessionType: SessionType.LOCAL, codingAgent: "codex" },
     } as Partial<PersistedSession>);
-    const snapshot = JSON.stringify([[local, worktree, other], projects]);
-    const result = assignProjects([local, worktree, other], projects, counter());
+    const gemini = makeSession("d", "/w/x", {
+      config: { projectDir: "/w/x", sessionType: SessionType.LOCAL, codingAgent: "gemini" },
+    } as Partial<PersistedSession>);
+    const snapshot = JSON.stringify([[local, worktree, other, gemini], projects]);
+    const result = assignProjects([local, worktree, other, gemini], projects, counter());
 
     expect(result.sessions[0].linkedDir).toBe("/w/x");
     expect(result.sessions[1].linkedDir).toBeUndefined();
     expect(result.sessions[2].linkedDir).toBeUndefined();
-    expect(result.sessions.map(s => s.projectId)).toEqual(["p1", "p1", "p1"]);
+    expect(result.sessions[3].linkedDir).toBeUndefined();
+    expect(result.sessions.map(s => s.projectId)).toEqual(["p1", "p1", "p1", "p1"]);
     expect(result.projects).toHaveLength(1);
-    expect(JSON.stringify([[local, worktree, other], projects])).toBe(snapshot);
+    expect(JSON.stringify([[local, worktree, other, gemini], projects])).toBe(snapshot);
   });
 });
 

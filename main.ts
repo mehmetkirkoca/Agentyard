@@ -10,13 +10,14 @@ import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
+import {buildGeminiCommand, readGeminiPromptsAndModel} from "./gemini-launch";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {getBranches, getCurrentBranch} from "./git-utils";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
-import {listSlashCommands, readSessionModel, SessionModel, SlashCommand} from "./prompt-toolbar";
+import {listGeminiSlashCommands, listSlashCommands, readSessionModel, SessionModel, SlashCommand} from "./prompt-toolbar";
 import {buildForkTranscript} from "./fork-transcript";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {BRACKETED_PASTE_MODE_ENABLE, isTerminalReady} from "./terminal-utils";
@@ -470,6 +471,42 @@ const MCP_LIST_COMMAND = "claude mcp list 2>&1 | cat";
 // Give up waiting for a parseable `claude mcp list` result after this long
 const MCP_POLL_TIMEOUT_MS = 45000;
 
+function resolveNodeBinPath(home: string = os.homedir()): string | undefined {
+  if (process.env.NVM_BIN && fs.existsSync(process.env.NVM_BIN)) {
+    return process.env.NVM_BIN;
+  }
+  const nvmVersionsDir = path.join(home, ".nvm", "versions", "node");
+  if (fs.existsSync(nvmVersionsDir)) {
+    try {
+      const versions = fs.readdirSync(nvmVersionsDir).filter(v => v.startsWith("v"));
+      versions.sort((a, b) => {
+        const parse = (v: string) => v.slice(1).split(".").map(Number);
+        const [aMaj = 0, aMin = 0] = parse(a);
+        const [bMaj = 0, bMin = 0] = parse(b);
+        return bMaj !== aMaj ? bMaj - aMaj : bMin - aMin;
+      });
+      if (versions.length > 0) {
+        const candidate = path.join(nvmVersionsDir, versions[0], "bin");
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
+function getPtyEnv(sessionId: string): NodeJS.ProcessEnv {
+  const env = buildPtyEnv(process.env, sessionId);
+  delete env.npm_config_prefix;
+  delete env.NPM_CONFIG_PREFIX;
+  const nodeBin = resolveNodeBinPath();
+  if (nodeBin) {
+    const currentPath = env.PATH || "";
+    const parts = currentPath.split(path.delimiter).filter(p => p !== nodeBin);
+    env.PATH = [nodeBin, ...parts].join(path.delimiter);
+  }
+  return env;
+}
+
 // Spawn headless PTY for MCP polling
 function spawnMcpPoller(sessionId: string, projectDir: string) {
   const shell = os.platform() === "darwin" ? "zsh" : "bash";
@@ -478,7 +515,7 @@ function spawnMcpPoller(sessionId: string, projectDir: string) {
     cols: 80,
     rows: 30,
     cwd: projectDir,
-    env: buildPtyEnv(process.env, sessionId),
+    env: getPtyEnv(sessionId),
   });
 
   mcpPollerPtyProcesses.set(sessionId, ptyProcess);
@@ -575,7 +612,7 @@ function spawnSessionPty(
     cols: 80,
     rows: 30,
     cwd: workingDirectory,
-    env: buildPtyEnv(process.env, sessionId),
+    env: getPtyEnv(sessionId),
   });
 
   activePtyProcesses.set(sessionId, ptyProcess);
@@ -663,6 +700,15 @@ function spawnSessionPty(
             if (!mcpPollerPtyProcesses.has(sessionId) && projectDir) {
               spawnMcpPoller(sessionId, projectDir);
             }
+          } else if (config.codingAgent === "gemini") {
+            const geminiCmd = buildGeminiCommand({
+              sessionUuid,
+              isNew: isNewSession,
+              targetDir: workingDirectory,
+              skipPermissions: !!config.skipPermissions,
+            });
+            ptyProcess.write(geminiCmd + "\r");
+            prefillPending = !!prefill;
           } else if (config.codingAgent === "codex") {
             ptyProcess.write("codex\r");
           }
@@ -1185,6 +1231,10 @@ function readSessionPrompts(session: PersistedSession): PromptHistory | undefine
 ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return [];
+  if (session.config.codingAgent === "gemini") {
+    const dir = session.worktreePath || session.config.projectDir;
+    return readGeminiPromptsAndModel(dir, undefined, session.sessionUuid).prompts;
+  }
   try {
     return readSessionPrompts(session)?.prompts ?? [];
   } catch (error) {
@@ -1199,6 +1249,11 @@ const sessionModels = new Map<string, SessionModel>();
 ipcMain.handle("get-session-model", (_event, sessionId: string): {model?: string; effort?: string} => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return {};
+  if (session.config.codingAgent === "gemini") {
+    const dir = session.worktreePath || session.config.projectDir;
+    const {model} = readGeminiPromptsAndModel(dir, undefined, session.sessionUuid);
+    return {model: model || "Gemini"};
+  }
   const file = sessionTranscriptFile(session);
   if (!file) return {};
   try {
@@ -1217,6 +1272,9 @@ ipcMain.handle("list-slash-commands", (_event, sessionId: string): SlashCommand[
   const session = getPersistedSessions().find(s => s.id === sessionId);
   const projectDir = session ? (session.worktreePath || session.linkedDir || session.config.projectDir) : undefined;
   try {
+    if (session?.config.codingAgent === "gemini") {
+      return listGeminiSlashCommands({home: os.homedir(), projectDir});
+    }
     return listSlashCommands({home: os.homedir(), projectDir});
   } catch (error) {
     console.error(`Error listing slash commands for session ${sessionId}:`, error);
@@ -1517,7 +1575,7 @@ function spawnClaudeCommandRunner() {
     cols: 80,
     rows: 30,
     cwd: os.homedir(),
-    env: buildPtyEnv(process.env, "command-runner"),
+    env: getPtyEnv("command-runner"),
   });
 }
 
