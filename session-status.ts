@@ -2,8 +2,12 @@ import {SessionStatus} from "./types";
 
 export interface HookEvent {
   hook_event_name: string;
-  session_id: string;
+  /** Claude Code and Gemini CLI */
+  session_id?: string;
   notification_type?: string;
+  /** Antigravity CLI: its conversation id, and on Stop whether it is fully idle */
+  conversationId?: string;
+  fullyIdle?: boolean;
 }
 
 /**
@@ -33,16 +37,21 @@ export function parseHookEvents(text: string): HookEvent[] {
 export function nextStatus(current: SessionStatus | undefined, ev: HookEvent, isViewed: boolean): SessionStatus {
   const finished = isViewed ? SessionStatus.IDLE : SessionStatus.DONE;
   switch (ev.hook_event_name) {
-    // Claude Code: UserPromptSubmit/PostToolUse, Gemini CLI: BeforeAgent/AfterTool
+    // Claude Code: UserPromptSubmit/PostToolUse, Gemini CLI: BeforeAgent/AfterTool,
+    // Antigravity CLI: PreInvocation/PostToolUse. Its PreToolUse is left out: it comes right before
+    // the approval screen, and read late from the status file it would undo WAITING.
     case "UserPromptSubmit":
     case "PostToolUse":
     case "BeforeAgent":
     case "AfterTool":
+    case "PreInvocation":
       return SessionStatus.RUNNING;
     // Gemini CLI sends notification_type "ToolPermission" while it waits for approval
     case "Notification":
       return ev.notification_type === "idle_prompt" ? finished : SessionStatus.WAITING;
+    // Antigravity sends fullyIdle: false when work goes on in the background
     case "Stop":
+      return ev.fullyIdle === false ? current ?? SessionStatus.RUNNING : finished;
     case "AfterAgent":
       return finished;
     default:

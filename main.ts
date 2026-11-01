@@ -1,4 +1,4 @@
-import {exec} from "child_process";
+import {exec, execFile, spawnSync} from "child_process";
 import {app, BrowserWindow, clipboard, dialog, ipcMain} from "electron";
 import Store from "electron-store";
 import * as fs from "fs";
@@ -11,13 +11,15 @@ import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
 import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
+import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, buildAgyCommand, createAgyWaitingDetector, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
+import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity-screen";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {getBranches, getCurrentBranch} from "./git-utils";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
-import {listGeminiSlashCommands, listSlashCommands, readSessionModel, SessionModel, SlashCommand} from "./prompt-toolbar";
+import {listAntigravitySlashCommands, listGeminiSlashCommands, listSlashCommands, readSessionModel, SessionModel, SlashCommand} from "./prompt-toolbar";
 import {buildForkTranscript} from "./fork-transcript";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {BRACKETED_PASTE_MODE_ENABLE, isTerminalReady} from "./terminal-utils";
@@ -226,12 +228,28 @@ function processStatusFile(filePath: string): void {
     }
 
     // Do not advance the offset until the uuid maps to a persisted session, so events are not lost
-    const target = getPersistedSessions().find(s => s.sessionUuid === sessionUuid);
+    const persisted = getPersistedSessions();
+    const target = persisted.find(s => s.sessionUuid === sessionUuid);
     if (!target) return;
     statusFileOffsets.set(filePath, newOffset);
+    let accepted = events;
+    if (target.config.codingAgent === "antigravity") {
+      // Only the session's own conversation counts (not sub-agents); learn its id from the events
+      const filtered = filterAgyEvents(target.agentConversationId, events);
+      accepted = filtered.accepted;
+      if (filtered.conversationId && filtered.conversationId !== target.agentConversationId) {
+        const next = adoptAgyConversation(target, filtered.conversationId);
+        if (next.agentConversationId !== target.agentConversationId) {
+          target.agentConversationId = next.agentConversationId;
+          target.forkedFrom = next.forkedFrom;
+          target.forkedPromptCount = next.forkedPromptCount;
+          savePersistedSessions(persisted);
+        }
+      }
+    }
     applySessionStatus(target.id, current => {
       let status = current;
-      for (const ev of events) {
+      for (const ev of accepted) {
         status = nextStatus(status, ev, viewedSessionId === target.id);
       }
       return status;
@@ -505,8 +523,8 @@ function resolveNodeBinPath(home: string = os.homedir()): string | undefined {
   return undefined;
 }
 
-function getPtyEnv(sessionId: string): NodeJS.ProcessEnv {
-  const env = buildPtyEnv(process.env, sessionId);
+function getPtyEnv(sessionId: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = {...buildPtyEnv(process.env, sessionId), ...extra};
   delete env.npm_config_prefix;
   delete env.NPM_CONFIG_PREFIX;
   const nodeBin = resolveNodeBinPath();
@@ -603,6 +621,11 @@ function spawnMcpPoller(sessionId: string, projectDir: string) {
 
 // Pause between Claude turning on bracketed paste and the prefill, so its input box has mounted
 const PREFILL_DELAY_MS = 500;
+// agy's footer hint, drawn once its input box listens; a fork sends /fork after it
+const AGY_READY_HINT = "? for shortcuts";
+const AGY_READY_TAIL = 4096;
+const AGY_FORK_DELAY_MS = 500;
+const AGY_SUBMIT_DELAY_MS = 100;
 
 // Helper function to spawn PTY and setup coding agent
 function spawnSessionPty(
@@ -615,15 +638,19 @@ function spawnSessionPty(
   projectDir?: string,
   forkFrom?: string,
   /** text pasted into Claude's input box, unsent, once Claude is up (a fork's prompt) */
-  prefill?: string
+  prefill?: string,
+  /** Antigravity: the conversation to resume */
+  agentConversationId?: string,
 ) {
   const shell = os.platform() === "darwin" ? "zsh" : "bash";
+  const isAgy = config.codingAgent === "antigravity";
   const ptyProcess = pty.spawn(shell, ["-l"], {
     name: "xterm-color",
     cols: 80,
     rows: 30,
     cwd: workingDirectory,
-    env: getPtyEnv(sessionId),
+    // agy's hooks (agentyard-status plugin) append to this file; they do nothing without it
+    env: getPtyEnv(sessionId, isAgy ? {[AGY_STATUS_ENV]: statusFilePath(sessionUuid)} : {}),
   });
 
   activePtyProcesses.set(sessionId, ptyProcess);
@@ -646,11 +673,33 @@ function spawnSessionPty(
   // the command, so the first "on" after the command is Claude's
   let prefillPending = false;
   let prefillTail = "";
+  // agy sends no hook while it waits for approval: its screen is watched instead
+  const agyWaiting = isAgy ? createAgyWaitingDetector() : null;
+  // A fork of an agy conversation: once agy is up, /fork makes this session a copy of it
+  let agyForkPending = false;
+  let agyReadyTail = "";
 
   ptyProcess.onData((data) => {
     // Only send data if window still exists and is not destroyed
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("session-output", sessionId, data);
+    }
+
+    if (agyWaiting?.(data)) applySessionStatus(sessionId, () => SessionStatus.WAITING);
+
+    if (agyForkPending) {
+      agyReadyTail = (agyReadyTail + stripAnsi(data)).slice(-AGY_READY_TAIL);
+      if (agyReadyTail.includes(AGY_READY_HINT)) {
+        agyForkPending = false;
+        setTimeout(() => {
+          if (activePtyProcesses.get(sessionId) !== ptyProcess) return;
+          ptyProcess.write("/fork");
+          // agy, like Gemini CLI, may take an Enter right after typing for a newline
+          setTimeout(() => {
+            if (activePtyProcesses.get(sessionId) === ptyProcess) ptyProcess.write("\r");
+          }, AGY_SUBMIT_DELAY_MS);
+        }, AGY_FORK_DELAY_MS);
+      }
     }
 
     if (prefillPending) {
@@ -722,6 +771,18 @@ function spawnSessionPty(
             });
             ptyProcess.write(geminiCmd + "\r");
             prefillPending = !!prefill;
+          } else if (isAgy) {
+            try {
+              resetStatusFile(sessionUuid);
+            } catch (error) {
+              console.error(`Error preparing status file for Antigravity session ${sessionUuid}:`, error);
+            }
+            ptyProcess.write(buildAgyCommand({
+              binary: resolveAgyBinary(),
+              conversationId: agentConversationId ?? forkFrom,
+              skipPermissions: !!config.skipPermissions,
+            }) + "\r");
+            agyForkPending = !agentConversationId && !!forkFrom;
           } else if (config.codingAgent === "codex") {
             ptyProcess.write("codex\r");
           }
@@ -1160,8 +1221,11 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
     return;
   }
 
+  // An agy fork closed before its first prompt never got its own conversation: fork again
+  if (session.config.codingAgent === "antigravity" && !session.agentConversationId) forkFrom = session.forkedFrom;
+
   // Spawn new PTY in the appropriate directory
-  spawnSessionPty(sessionId, workingDir, session.config, session.sessionUuid, isNew, session.mcpConfigPath, session.config.projectDir, forkFrom);
+  spawnSessionPty(sessionId, workingDir, session.config, session.sessionUuid, isNew, session.mcpConfigPath, session.config.projectDir, forkFrom, undefined, session.agentConversationId);
 
   event.reply("session-reopened", sessionId);
 });
@@ -1248,6 +1312,7 @@ ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
     const dir = session.worktreePath || session.config.projectDir;
     return readGeminiPromptsAndModel(dir, undefined, session.sessionUuid).prompts;
   }
+  if (session.config.codingAgent === "antigravity") return agyPromptsOf(session, getPersistedSessions());
   try {
     return readSessionPrompts(session)?.prompts ?? [];
   } catch (error) {
@@ -1255,6 +1320,39 @@ ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
     return promptHistories.get(session.sessionUuid)?.prompts ?? [];
   }
 });
+
+// Pane toolbar model menu for Antigravity: `agy models` takes seconds, so it is read once, async
+let agyModelsCache: Promise<AgyModelFamily[]> | null = null;
+ipcMain.handle("get-agy-models", (): Promise<AgyModelFamily[]> => {
+  agyModelsCache ??= new Promise(resolve => {
+    execFile(resolveAgyBinary(), ["models"], {timeout: 30000}, (error, stdout) => {
+      const families = error ? [] : groupAgyModels(stdout);
+      if (error) console.error("Reading Antigravity models failed:", error);
+      if (families.length === 0) agyModelsCache = null; // try again next time
+      resolve(families.length > 0 ? families : AGY_FALLBACK_MODELS);
+    });
+  });
+  return agyModelsCache;
+});
+
+// The agentyard-status plugin carries agy's hooks; set up once per app start, never re-enabled
+let agyPluginResult: AgyPluginResult | null = null;
+function setUpAgyStatusPlugin(): void {
+  const binary = resolveAgyBinary();
+  agyPluginResult = ensureAgyStatusPlugin({
+    binary,
+    sourceDir: path.join(appHome(), "agy-plugin", "agentyard-status"),
+    run: args => {
+      const result = spawnSync(binary, args, {encoding: "utf8", timeout: 30000});
+      if (result.error) throw result.error;
+      return {status: result.status, stdout: result.stdout, stderr: result.stderr};
+    },
+  });
+  // No agy installed: nothing to report
+  if (!agyPluginResult.ok && agyPluginResult.reason === "failed" && /ENOENT/.test(agyPluginResult.message)) agyPluginResult = {ok: true};
+  if (!agyPluginResult.ok) console.error(agyPluginResult.message);
+}
+ipcMain.handle("agy-plugin-status", (): AgyPluginResult => agyPluginResult ?? {ok: true});
 
 // Pane toolbar voice button: Gemini CLI has /voice only with experimental.voiceMode on
 ipcMain.handle("gemini-voice-enabled", (_event, sessionId: string): boolean => {
@@ -1269,6 +1367,8 @@ const sessionModels = new Map<string, SessionModel>();
 ipcMain.handle("get-session-model", (_event, sessionId: string): {model?: string; effort?: string} => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return {};
+  // Antigravity's transcript has no model: the renderer reads model and effort from its footer
+  if (session.config.codingAgent === "antigravity") return {};
   if (session.config.codingAgent === "gemini") {
     const dir = session.worktreePath || session.config.projectDir;
     // No model before the first reply: the renderer keeps a model chosen from the menu meanwhile
@@ -1294,6 +1394,9 @@ ipcMain.handle("list-slash-commands", (_event, sessionId: string): SlashCommand[
   try {
     if (session?.config.codingAgent === "gemini") {
       return listGeminiSlashCommands({home: os.homedir(), projectDir});
+    }
+    if (session?.config.codingAgent === "antigravity") {
+      return listAntigravitySlashCommands({home: os.homedir(), projectDir});
     }
     return listSlashCommands({home: os.homedir(), projectDir});
   } catch (error) {
@@ -1354,7 +1457,46 @@ function prepareFork(sessions: PersistedSession[], sessionId: string): {original
   return {original, fork, dir, warning: gate.warning};
 }
 
+// An agy fork: a new local session in the same directory that opens the original conversation and
+// sends /fork; agy then works on a copy and the original stays as it was (see spawnSessionPty)
+function prepareAgyFork(sessions: PersistedSession[], original: PersistedSession): PersistedSession {
+  if (original.config.sessionType !== SessionType.LOCAL) throw new Error("Only local sessions can be forked");
+  if (!original.agentConversationId) throw new Error("This conversation has no messages yet; nothing to fork");
+  return {
+    id: `session-${Date.now()}`,
+    number: getNextSessionNumber(),
+    name: `${original.name} (fork)`,
+    config: {...original.config},
+    createdAt: Date.now(),
+    sessionUuid: uuidv4(),
+    projectId: original.projectId,
+    origin: "agentyard",
+    manualName: true,
+    lastActivity: Date.now(),
+    forkedFrom: original.agentConversationId,
+    // agy's fork transcript starts after the fork: its prompt list begins with these of the original
+    forkedPromptCount: agyPromptsOf(original, sessions).length,
+  };
+}
+
 ipcMain.on("fork-session", (event, sessionId: string) => {
+  const agyOriginal = getPersistedSessions().find(s => s.id === sessionId && s.config.codingAgent === "antigravity");
+  if (agyOriginal) {
+    try {
+      const sessions = getPersistedSessions();
+      const fork = prepareAgyFork(sessions, agyOriginal);
+      sessions.push(fork);
+      savePersistedSessions(sessions);
+      const dir = fork.config.projectDir;
+      spawnSessionPty(fork.id, dir, fork.config, fork.sessionUuid, true, undefined, dir, fork.forkedFrom);
+      event.reply("session-created", fork.id, fork);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Error forking Antigravity session ${sessionId}:`, error);
+      event.reply("session-error", `Fork failed: ${message}`);
+    }
+    return;
+  }
   try {
     const sessions = getPersistedSessions();
     const {original, fork, dir, warning} = prepareFork(sessions, sessionId);
@@ -1941,6 +2083,7 @@ app.whenReady().then(() => {
   migrateProjects();
   createWindow();
   startStatusWatcher();
+  setUpAgyStatusPlugin();
 
   // Spawn claude command runner PTY early so it's ready when needed (fire-and-forget)
   spawnClaudeCommandRunner();

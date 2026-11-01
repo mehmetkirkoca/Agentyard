@@ -1032,6 +1032,13 @@ body {
     color: var(--vsc-fg-muted);
   }
 
+  /* A line of text under a menu's items, e.g. Antigravity's "default for all sessions" note */
+  .toolbar-menu-note {
+    display: block;
+    padding: 4px 10px 2px;
+    white-space: normal;
+  }
+
   .command-menu {
     width: 560px;
     max-width: calc(100vw - 8px);

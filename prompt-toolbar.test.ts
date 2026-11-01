@@ -4,6 +4,7 @@ import * as path from "path";
 import {
   applyModelLines,
   geminiModeKey,
+  listAntigravitySlashCommands,
   listGeminiSlashCommands,
   listSlashCommands,
   modelLabel,
@@ -259,5 +260,53 @@ describe("listGeminiSlashCommands", () => {
     write(path.join(project, ".gemini/commands/deploy.toml"), 'description = "Proje"');
     expect(listGeminiSlashCommands({home, projectDir: project}).filter(c => c.name === "deploy"))
       .toEqual([{name: "deploy", description: "Proje", source: "project"}]);
+  });
+});
+
+describe("listAntigravitySlashCommands", () => {
+  let home: string;
+  let project: string;
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, text);
+  };
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+    project = fs.mkdtempSync(path.join(os.tmpdir(), "proj-"));
+  });
+  afterEach(() => {
+    fs.rmSync(home, {recursive: true, force: true});
+    fs.rmSync(project, {recursive: true, force: true});
+  });
+
+  it("lists built-ins and skills, hiding disable-slash-command ones", () => {
+    // layout of agy 1.4.12
+    write(path.join(home, ".gemini/config/skills/qrord/SKILL.md"), "---\nname: qrord\ndescription: Restoran yönetimi\n---\n");
+    write(path.join(home, ".gemini/antigravity-cli/builtin/skills/antigravity_guide/SKILL.md"),
+      "---\nname: antigravity-guide\ndescription: Guide\n---\n");
+    write(path.join(home, ".gemini/antigravity-cli/builtin/skills/ui-panels/SKILL.md"),
+      "---\nname: ui-panels\ndescription: Panels\ndisable-slash-command: true\n---\n");
+    write(path.join(home, ".gemini/config/config.json"), JSON.stringify({plugins: {p: {enabled: true}, off: {enabled: false}}}));
+    write(path.join(home, ".gemini/config/plugins/p/skills/s/SKILL.md"), "---\ndescription: Plugin skill\n---\n");
+    write(path.join(home, ".gemini/config/plugins/off/skills/hidden/SKILL.md"), "---\ndescription: Off\n---\n");
+    write(path.join(project, ".agents/skills/x/SKILL.md"), "---\ndescription: Proje\n---\n");
+
+    const byName = new Map(listAntigravitySlashCommands({home, projectDir: project}).map(c => [c.name, c]));
+    expect(byName.get("fork")?.source).toBe("built-in");
+    expect(byName.get("model")?.source).toBe("built-in");
+    expect(byName.get("qrord")).toEqual({name: "qrord", description: "Restoran yönetimi", source: "user"});
+    expect(byName.get("antigravity-guide")).toEqual({name: "antigravity-guide", description: "Guide", source: "built-in"});
+    expect(byName.has("antigravity_guide")).toBe(false);
+    expect(byName.has("ui-panels")).toBe(false);
+    expect(byName.get("p:s")).toEqual({name: "p:s", description: "Plugin skill", source: "plugin"});
+    expect(byName.has("off:hidden")).toBe(false);
+    expect(byName.get("x")).toEqual({name: "x", description: "Proje", source: "project"});
+  });
+
+  it("keeps a built-in command when a builtin skill has the same name", () => {
+    write(path.join(home, ".gemini/antigravity-cli/builtin/skills/plugin/SKILL.md"), "---\nname: plugin\ndescription: How to make plugins\n---\n");
+    const entries = listAntigravitySlashCommands({home}).filter(c => c.name === "plugin");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].description).not.toBe("How to make plugins");
   });
 });

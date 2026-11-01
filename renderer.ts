@@ -7,6 +7,7 @@ import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} fro
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady} from "./terminal-utils";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
+import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
 import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
 import {
   applyTemplate,
@@ -425,7 +426,10 @@ function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptCont
 
   let seekToken = 0;
   // Each CLI echoes prompts with its own glyph
-  const glyph = () => sessions.get(sessionId)?.config.codingAgent === "gemini" ? GEMINI_PROMPT_GLYPH : PROMPT_GLYPH;
+  const glyph = () => {
+    const agent = sessions.get(sessionId)?.config.codingAgent;
+    return agent === "gemini" ? GEMINI_PROMPT_GLYPH : agent === "antigravity" ? AGY_PROMPT_GLYPH : PROMPT_GLYPH;
+  };
 
   // Only the visible rows: fullscreen Claude Code scrolls its own view, so the screen is all there is
   const visibleLines = () => {
@@ -541,12 +545,16 @@ function openPromptPicker(leafId: number, anchor: HTMLElement): void {
   if (prompts.length === 0) return;
   const current = sticky.currentIndex();
 
+  // Forking right before a prompt rewrites a Claude transcript; other agents have no such fork
+  const session = sessionId ? sessions.get(sessionId) : undefined;
+  const canForkAt = !!session && isLocalClaude(session.config);
+
   const popover = document.createElement("div");
   popover.className = "prompt-picker";
   popover.innerHTML = prompts.map((prompt, idx) => {
     const oneLine = escapeHtml(prompt.replace(/\s+/g, " ").trim());
     // The first prompt has nothing before it to fork from
-    const fork = idx > 0
+    const fork = canForkAt && idx > 0
       ? `<span class="prompt-picker-fork" data-idx="${idx}" title="Fork the conversation right before this prompt">Fork</span>`
       : "";
     return `<button class="prompt-picker-row${idx === current ? " current" : ""}" data-idx="${idx}" title="${escapeHtml(prompt)}">
@@ -725,7 +733,20 @@ function refreshSessionIndicator(sessionId: string, root?: HTMLElement) {
 // Claude Code and Gemini CLI report their state through hooks (status dots); other agents are
 // judged from their terminal output
 function hasHookStatus(config: SessionConfig): boolean {
-  return config.codingAgent === "claude" || config.codingAgent === "gemini";
+  return config.codingAgent === "claude" || config.codingAgent === "gemini" || config.codingAgent === "antigravity";
+}
+
+// Antigravity echoes a prompt as "> <first line>" at the row start, like its input box
+const AGY_PROMPT_GLYPH = "> ";
+
+// Agents whose terminal is a full agent CLI with the pane toolbar (attach, voice, commands, model, mode)
+function hasAgentToolbar(config: SessionConfig): boolean {
+  return hasHookStatus(config);
+}
+
+// Fork: local Claude sessions (transcript copy) and local Antigravity sessions (agy's /fork)
+function canFork(config: SessionConfig): boolean {
+  return config.sessionType === SessionType.LOCAL && (config.codingAgent === "claude" || config.codingAgent === "antigravity");
 }
 
 // For hook-driven sessions the tab activity/unread classes are derived from the hook-based status
@@ -789,7 +810,7 @@ function showToast(message: string, kind: ToastKind = "info"): void {
 function addToSidebar(list: HTMLElement, sessionId: string, name: string, config: SessionConfig) {
   const isWorktree = config.sessionType === SessionType.WORKTREE;
   const applyMenuItem = isWorktree ? `<button class="session-menu-item apply-to-project-btn" data-id="${sessionId}">Apply to project</button>` : '';
-  const skipMenuItem = (config.codingAgent === "claude" || config.codingAgent === "gemini")
+  const skipMenuItem = hasAgentToolbar(config)
     ? `<button class="session-menu-item skip-permissions-btn" data-id="${sessionId}">Skip permissions: ${config.skipPermissions ? "on" : "off"}</button>`
     : '';
   const sess = sessions.get(sessionId);
@@ -797,7 +818,7 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
     && hasOtherDirectory(sess.meta.projectId, config.projectDir)
     ? `<button class="session-menu-item move-dir-btn" data-id="${sessionId}">Move to directory…</button>`
     : '';
-  const forkMenuItem = isLocalClaude(config)
+  const forkMenuItem = canFork(config)
     ? `<button class="session-menu-item fork-session-btn" data-id="${sessionId}">Fork</button>`
     : '';
   const safeName = escapeHtml(name);
@@ -1822,7 +1843,7 @@ function openTabContextMenu(sessionId: string, x: number, y: number) {
     {label: "Split Down", run: () => splitPaneWith(paneState.focused, "bottom", sessionId), disabled: inFocusedPane},
     "separator",
     {label: "Rename…", run: () => startEditingTabName(sessionId)},
-    {label: "Fork", run: () => ipcRenderer.send("fork-session", sessionId), disabled: !localClaude},
+    {label: "Fork", run: () => ipcRenderer.send("fork-session", sessionId), disabled: !canFork(session.config)},
     {label: "Copy Directory Path", run: () => {
       clipboard.writeText(dir);
       showToast(`Copied ${dir}`, "info");
@@ -2039,7 +2060,7 @@ function paneClaudeSession(leafId: number): Session | null {
   const id = paneSession(paneState, leafId);
   const session = id ? sessions.get(id) : undefined;
   if (!session || !session.terminal || !session.hasActivePty) return null;
-  if (session.config.codingAgent !== "claude" && session.config.codingAgent !== "gemini") return null;
+  if (!hasAgentToolbar(session.config)) return null;
   return session;
 }
 
@@ -2110,13 +2131,15 @@ async function toggleVoiceMode(leafId: number) {
     return;
   }
   submitToSession(session.id, "/voice");
-  showToast("Toggled Claude voice mode — the terminal shows whether it is on (hold Space to talk)");
+  showToast(session.config.codingAgent === "antigravity"
+    ? "Started Antigravity voice dictation — the terminal shows the recording"
+    : "Toggled Claude voice mode — the terminal shows whether it is on (hold Space to talk)");
 }
 
 // Toolbar at the bottom of each pane, under Claude's own prompt box: attach, voice, slash commands,
 // and the session's model and permission mode. Choices are sent to the terminal (/model, /effort,
 // Shift+Tab); the mode is read back from Claude Code's footer line, the model from the transcript.
-const sessionModes = new Map<string, PermissionMode | GeminiApprovalMode>();
+const sessionModes = new Map<string, PermissionMode | GeminiApprovalMode | AgyMode>();
 const sessionModels = new Map<string, {model?: string; effort?: string}>();
 const modeReadTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -2153,13 +2176,14 @@ function renderPaneToolbar(pane: HTMLElement, leafId: number, shown: boolean) {
   bar.querySelectorAll<HTMLButtonElement>("button").forEach(btn => { btn.disabled = !session; });
 
   const isGemini = session?.config.codingAgent === "gemini";
+  const isAgy = session?.config.codingAgent === "antigravity";
   const modelChip = bar.querySelector('[data-action="model"]') as HTMLElement;
   const modeChip = bar.querySelector('[data-action="mode"]') as HTMLElement;
   const info = session ? sessionModels.get(session.id) : undefined;
   (modelChip.querySelector(".chip-main") as HTMLElement).textContent = info?.model ? modelLabel(info.model) : "Model";
   (modelChip.querySelector(".chip-sub") as HTMLElement).textContent = info?.effort ? capitalize(info.effort) : "";
-  const mode = (session && sessionModes.get(session.id)) || (isGemini ? "default" : "manual");
-  const modesList: {mode: string; label: string; icon: string}[] = isGemini ? GEMINI_PERMISSION_MODES : PERMISSION_MODES;
+  const mode = (session && sessionModes.get(session.id)) || (isGemini || isAgy ? "default" : "manual");
+  const modesList: {mode: string; label: string; icon: string}[] = isGemini ? GEMINI_PERMISSION_MODES : isAgy ? AGY_MODES : PERMISSION_MODES;
   const entry = modesList.find(m => m.mode === mode) ?? {icon: "⏵", label: mode};
   (modeChip.querySelector(".chip-icon") as HTMLElement).textContent = entry.icon;
   (modeChip.querySelector(".chip-main") as HTMLElement).textContent = entry.label;
@@ -2206,13 +2230,21 @@ function terminalBottomLines(term: Terminal, count: number, skipBlankTail = fals
   return lines;
 }
 
-function readSessionMode(sessionId: string): PermissionMode | GeminiApprovalMode | undefined {
+function readSessionMode(sessionId: string): PermissionMode | GeminiApprovalMode | AgyMode | undefined {
   const session = sessions.get(sessionId);
   const term = session?.terminal;
   if (!session || !term || !term.element) return undefined;
   // Gemini CLI's mode line sits above its input box and the workspace footer
   if (session.config.codingAgent === "gemini") return parseGeminiApprovalMode(terminalBottomLines(term, 10, true));
+  if (session.config.codingAgent === "antigravity") return readAgyFooter(sessionId)?.mode;
   return parsePermissionMode(terminalBottomLines(term, 4));
+}
+
+// Antigravity's footer: "[mode · ]Model · effort" on its last row
+function readAgyFooter(sessionId: string) {
+  const term = sessions.get(sessionId)?.terminal;
+  if (!term || !term.element) return undefined;
+  return parseAgyFooter(terminalBottomLines(term, 6, true));
 }
 
 // Called on terminal output: re-read the mode once the output has settled
@@ -2220,6 +2252,15 @@ function scheduleModeRead(sessionId: string) {
   if (modeReadTimers.has(sessionId)) return;
   modeReadTimers.set(sessionId, setTimeout(() => {
     modeReadTimers.delete(sessionId);
+    if (sessions.get(sessionId)?.config.codingAgent === "antigravity") {
+      // agy shows its model and effort only in the footer (its transcript has no model)
+      const footer = readAgyFooter(sessionId);
+      const prev = sessionModels.get(sessionId);
+      if (footer && (prev?.model !== footer.model || prev?.effort !== footer.effort)) {
+        sessionModels.set(sessionId, {model: footer.model, effort: footer.effort});
+        renderToolbarsOf(sessionId);
+      }
+    }
     const mode = readSessionMode(sessionId);
     if (!mode || sessionModes.get(sessionId) === mode) return;
     sessionModes.set(sessionId, mode);
@@ -2247,6 +2288,25 @@ async function setSessionMode(sessionId: string, target: PermissionMode) {
 
 // Gemini CLI: Ctrl+Y toggles YOLO, Shift+Tab cycles the others; each key is checked on the mode line.
 // Gemini skips plan while it is busy, and shows no mode line while a dialog is open.
+// Antigravity: Shift+Tab cycles default -> accept-edits -> plan; each key is checked on the footer
+async function setAgyMode(sessionId: string, target: AgyMode) {
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let i = 0; i <= AGY_MODES.length; i++) {
+    const current = readAgyFooter(sessionId)?.mode;
+    if (!current) break;
+    if (current === target) {
+      sessionModes.set(sessionId, current);
+      renderToolbarsOf(sessionId);
+      return;
+    }
+    ipcRenderer.send("session-input", sessionId, "\x1b[Z");
+    await wait(250);
+  }
+  const label = AGY_MODES.find(m => m.mode === target)?.label ?? target;
+  showToast(`Could not switch to "${label}" mode — Antigravity may be busy or showing a dialog`, "warning");
+  scheduleModeRead(sessionId);
+}
+
 async function setGeminiMode(sessionId: string, target: GeminiApprovalMode) {
   const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   for (let i = 0; i <= GEMINI_PERMISSION_MODES.length + 1; i++) {
@@ -2351,7 +2411,9 @@ const GEMINI_SUBMIT_DELAY_MS = 100;
 
 /** Type a slash command into the session's input and submit it. */
 function submitToSession(sessionId: string, command: string) {
-  if (sessions.get(sessionId)?.config.codingAgent !== "gemini") {
+  const agent = sessions.get(sessionId)?.config.codingAgent;
+  // Antigravity gets the same separate Enter (its fast-Enter handling was not measured)
+  if (agent !== "gemini" && agent !== "antigravity") {
     sendToSession(sessionId, command + "\r");
     return;
   }
@@ -2359,9 +2421,53 @@ function submitToSession(sessionId: string, command: string) {
   setTimeout(() => ipcRenderer.send("session-input", sessionId, "\r"), GEMINI_SUBMIT_DELAY_MS);
 }
 
+// agy model families (`agy models`), read once per app run by main
+let agyModels: Promise<AgyModelFamily[]> | null = null;
+
+async function openAgyModelMenu(button: HTMLElement, session: Session) {
+  agyModels ??= ipcRenderer.invoke("get-agy-models") as Promise<AgyModelFamily[]>;
+  let families: AgyModelFamily[] = [];
+  try {
+    families = await agyModels;
+  } catch (error) {
+    console.error("get-agy-models failed:", error);
+    agyModels = null;
+  }
+  const info = sessionModels.get(session.id) ?? {};
+  const effort = info.effort ?? "medium";
+  const menu = document.createElement("div");
+  menu.appendChild(menuHeading("Model"));
+  for (const family of families) {
+    menu.appendChild(menuItem(family.label, family.label === info.model, () => {
+      submitToSession(session.id, agyModelCommand(family, effort));
+      sessionModels.set(session.id, {model: family.label, effort: family.efforts.includes(effort) ? effort : family.efforts[0]});
+      renderToolbarsOf(session.id);
+    }));
+  }
+  menu.appendChild(menuHeading("Effort"));
+  // GPT-OSS has only medium: never offer an effort the current model lacks
+  for (const level of agyEffortsFor(families, info.model)) {
+    menu.appendChild(menuItem(capitalize(level), level === info.effort, () => {
+      submitToSession(session.id, `/effort ${level}`);
+      sessionModels.set(session.id, {...sessionModels.get(session.id), effort: level});
+      renderToolbarsOf(session.id);
+    }));
+  }
+  // agy saves /model and /effort in its settings.json, for every agy session
+  const note = document.createElement("div");
+  note.className = "toolbar-menu-hint toolbar-menu-note";
+  note.textContent = "Antigravity makes this the default for all its sessions";
+  menu.appendChild(note);
+  showToolbarMenu(button, menu);
+}
+
 function openModelMenu(button: HTMLElement, leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
+  if (session.config.codingAgent === "antigravity") {
+    void openAgyModelMenu(button, session);
+    return;
+  }
   const isGemini = session.config.codingAgent === "gemini";
   const info = sessionModels.get(session.id) ?? {};
   const currentLabel = info.model ? modelLabel(info.model) : "";
@@ -2391,6 +2497,19 @@ function openModelMenu(button: HTMLElement, leafId: number) {
 function openModeMenu(button: HTMLElement, leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
+  if (session.config.codingAgent === "antigravity") {
+    const current = readAgyFooter(session.id)?.mode ?? sessionModes.get(session.id) ?? "default";
+    const menu = document.createElement("div");
+    menu.appendChild(menuHeading("Mode"));
+    for (const entry of AGY_MODES) {
+      menu.appendChild(menuItem(`${entry.icon}  ${entry.label}`, entry.mode === current, () => {
+        void setAgyMode(session.id, entry.mode);
+        session.terminal?.focus();
+      }));
+    }
+    showToolbarMenu(button, menu);
+    return;
+  }
   const isGemini = session.config.codingAgent === "gemini";
   if (isGemini) {
     const current = readSessionMode(session.id) ?? sessionModes.get(session.id) ?? "default";
@@ -3193,7 +3312,21 @@ ipcRenderer.on("load-persisted-sessions", (_event, persistedSessions: PersistedS
   savePaneState();
   renderPanes();
   reopenVisibleSessions();
+  void reportAgyPluginStatus();
 });
+
+// Antigravity status dots need the agentyard-status plugin; say once per start when it is missing
+async function reportAgyPluginStatus() {
+  try {
+    const result = await ipcRenderer.invoke("agy-plugin-status") as {ok: boolean; reason?: string; message?: string};
+    if (result.ok) return;
+    showToast(result.reason === "disabled"
+      ? 'Antigravity status dots are off: run "agy plugin enable agentyard-status"'
+      : result.message ?? "Setting up the Antigravity status plugin failed", "warning");
+  } catch (error) {
+    console.error("agy-plugin-status failed:", error);
+  }
+}
 
 // At startup the panes show their saved sessions without a PTY: reopen them instead of waiting for
 // a click. Background tabs stay closed. Main refuses a conversation open elsewhere (VSCode/terminal).
@@ -3299,7 +3432,10 @@ function updateSkipPermissionsVisibility(agent: string) {
     if (label) label.textContent = "Skip permissions (use --dangerously-skip-permissions)";
   } else if (agent === "gemini") {
     skipPermissionsGroup?.classList.remove("hidden");
-    if (label) label.textContent = "Skip permissions (use --yolo)";
+    if (label) label.textContent = "Skip permissions (use --approval-mode=yolo)";
+  } else if (agent === "antigravity") {
+    skipPermissionsGroup?.classList.remove("hidden");
+    if (label) label.textContent = "Skip permissions (use --dangerously-skip-permissions)";
   } else {
     skipPermissionsGroup?.classList.add("hidden");
   }
@@ -3534,7 +3670,7 @@ createBtn?.addEventListener("click", () => {
     parentBranch: sessionType === SessionType.WORKTREE ? parentBranchSelect.value : undefined,
     branchName,
     codingAgent: codingAgentSelect.value,
-    skipPermissions: (codingAgentSelect.value === "claude" || codingAgentSelect.value === "gemini") ? skipPermissionsCheckbox.checked : false,
+    skipPermissions: ["claude", "gemini", "antigravity"].includes(codingAgentSelect.value) ? skipPermissionsCheckbox.checked : false,
     setupCommands,
   };
 

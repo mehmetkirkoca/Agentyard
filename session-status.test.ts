@@ -52,6 +52,18 @@ describe("nextStatus", () => {
     expect(nextStatus(status, ev("AfterAgent"), false)).toBe(SessionStatus.DONE);
     expect(nextStatus(status, ev("AfterAgent"), true)).toBe(SessionStatus.IDLE);
   });
+  it("maps Antigravity hook events", () => {
+    expect(nextStatus(SessionStatus.IDLE, {hook_event_name: "PreInvocation"}, false)).toBe(SessionStatus.RUNNING);
+    // PreToolUse comes right before agy draws its approval screen; it must not undo WAITING
+    expect(nextStatus(SessionStatus.WAITING, {hook_event_name: "PreToolUse"}, false)).toBe(SessionStatus.WAITING);
+    expect(nextStatus(SessionStatus.WAITING, {hook_event_name: "PostToolUse"}, false)).toBe(SessionStatus.RUNNING);
+    expect(nextStatus(SessionStatus.RUNNING, {hook_event_name: "Stop", fullyIdle: true}, false)).toBe(SessionStatus.DONE);
+    expect(nextStatus(SessionStatus.RUNNING, {hook_event_name: "Stop", fullyIdle: false}, false)).toBe(SessionStatus.RUNNING);
+    expect(nextStatus(SessionStatus.RUNNING, {hook_event_name: "PostInvocation"}, false)).toBe(SessionStatus.RUNNING);
+  });
+  it("accepts hook lines without session_id", () => {
+    expect(parseHookEvents('{"hook_event_name":"Stop","conversationId":"c","fullyIdle":true}\n')).toHaveLength(1);
+  });
   it("unknown event keeps current status", () => {
     expect(nextStatus(SessionStatus.DONE, ev("SessionStart"), false)).toBe(SessionStatus.DONE);
   });

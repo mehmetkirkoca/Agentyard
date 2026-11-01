@@ -369,3 +369,100 @@ export function listGeminiSlashCommands(opts: {home: string; projectDir?: string
   if (opts.projectDir) addFrom(opts.projectDir, "project");
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/** Antigravity CLI built-in commands (1.4.12), with the descriptions its menu shows, shortened. */
+export const ANTIGRAVITY_BUILT_IN_COMMANDS: [string, string][] = [
+  ["add-dir", "Add a directory to the workspace"],
+  ["agents", "List available custom agents"],
+  ["artifact", "View and review artifacts"],
+  ["boost", "Invoke the Boost multi-agent orchestrator"],
+  ["browser", "Invoke a browser agent for web tasks"],
+  ["btw", "Ask a side question without interrupting"],
+  ["changelog", "Show release notes and changes"],
+  ["clear", "Clear conversation and start a new one"],
+  ["compact", "Compact the conversation now"],
+  ["config", "Open settings panel"],
+  ["context", "Visualize current context usage"],
+  ["copy", "Copy the last planner response"],
+  ["credits", "Show remaining credits"],
+  ["diff", "View uncommitted changes and per-turn diffs"],
+  ["effort", "Set the reasoning effort"],
+  ["exit", "Exit the CLI"],
+  ["feedback", "Submit feedback"],
+  ["fork", "Create a branch of the current conversation"],
+  ["goal", "Run until the goal is completely finished"],
+  ["help", "Show available commands and keybindings"],
+  ["hooks", "Manage hook configurations"],
+  ["keybindings", "Set custom keybindings"],
+  ["learn", "Capture reusable skills or rules"],
+  ["logout", "Log out"],
+  ["mcp", "Manage MCP servers"],
+  ["model", "Set a model"],
+  ["open", "Open a file or view opened/edited files"],
+  ["permissions", "Manage tool permissions"],
+  ["plan", "Plan carefully before executing a task"],
+  ["plugin", "Manage plugins"],
+  ["remote-control", "Turn on remote control for this session"],
+  ["rename", "Rename the current conversation"],
+  ["resume", "Browse and resume past conversations"],
+  ["rewind", "Rewind conversation to a previous message"],
+  ["schedule", "Run an instruction on a schedule or timer"],
+  ["skills", "List available skills"],
+  ["statusline", "Toggle the statusline"],
+  ["tasks", "View background tasks"],
+  ["teamwork", "Invoke a team of agents"],
+  ["title", "Toggle custom terminal window title"],
+  ["usage", "View model quota usage"],
+  ["voice", "Dictate a prompt using your microphone"],
+];
+
+function frontmatterField(text: string, key: string): string | undefined {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const line = front && new RegExp(`^${key}:\\s*(.*)$`, "m").exec(front[1]);
+  return line ? line[1].trim().replace(/^(["'])(.*)\1$/, "$2") : undefined;
+}
+
+/** <dir>/<name>/SKILL.md as slash commands, named by their frontmatter name (else the folder). */
+function agySkillsUnder(dir: string, prefix: string, source: SlashCommand["source"]): SlashCommand[] {
+  const found: SlashCommand[] = [];
+  for (const entry of listDir(dir)) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const text = readText(path.join(dir, entry.name, "SKILL.md"));
+    if (text === undefined || frontmatterField(text, "disable-slash-command") === "true") continue;
+    const name = prefix + (frontmatterField(text, "name") || entry.name);
+    found.push({name, description: parseCommandDescription(text), source});
+  }
+  return found;
+}
+
+function enabledAgyPlugins(home: string): string[] {
+  try {
+    const config = JSON.parse(readText(path.join(home, ".gemini/config/config.json")) ?? "{}");
+    return Object.entries<any>(config?.plugins ?? {}).filter(([, p]) => p?.enabled === true).map(([name]) => name);
+  } catch (error) {
+    console.error("Reading the Antigravity plugin list failed:", error);
+    return [];
+  }
+}
+
+/**
+ * Slash commands Antigravity CLI offers: built-ins, its builtin skills, user skills
+ * (~/.gemini/config/skills), skills of enabled plugins (as plugin:name) and project skills
+ * (.agents/skills). A built-in command keeps its name over a skill; a project skill replaces a user
+ * one. Sorted by name.
+ */
+export function listAntigravitySlashCommands(opts: {home: string; projectDir?: string}): SlashCommand[] {
+  const byName = new Map<string, SlashCommand>();
+  // Built-ins come first and are never replaced
+  const add = (list: SlashCommand[]) => list.forEach(c => {
+    if (byName.get(c.name)?.source !== "built-in") byName.set(c.name, c);
+  });
+  add(ANTIGRAVITY_BUILT_IN_COMMANDS.map(([name, description]) => ({name, description, source: "built-in" as const})));
+  add(agySkillsUnder(path.join(opts.home, ".gemini/antigravity-cli/builtin/skills"), "", "built-in"));
+  add(agySkillsUnder(path.join(opts.home, ".gemini/config/skills"), "", "user"));
+  for (const plugin of enabledAgyPlugins(opts.home)) {
+    add(agySkillsUnder(path.join(opts.home, ".gemini/config/plugins", plugin, "skills"), `${plugin}:`, "plugin"));
+  }
+  if (opts.projectDir) add(agySkillsUnder(path.join(opts.projectDir, ".agents/skills"), "", "project"));
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}

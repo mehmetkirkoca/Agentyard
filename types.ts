@@ -47,6 +47,10 @@ export interface PersistedSession {
   linkedDir?: string;
   /** a fork's source conversation; used until the fork's own transcript exists */
   forkedFrom?: string;
+  /** Antigravity: agy's own conversation id, learned from its first hook event */
+  agentConversationId?: string;
+  /** Antigravity fork: how many prompts the original (forkedFrom) had when forked */
+  forkedPromptCount?: number;
 }
 
 export interface SessionRuntime {
