@@ -624,6 +624,14 @@ body {
     height: 35px;
   }
 
+  /* Thin fixed bar between the tab row and the panes, holds the layout picker */
+  .layout-bar {
+    @apply flex flex-none items-center;
+    height: 22px;
+    background-color: var(--vsc-sidebar);
+    border-bottom: 1px solid var(--vsc-border);
+  }
+
   .layout-picker {
     @apply flex flex-none items-center select-none;
     gap: 2px;
@@ -632,9 +640,9 @@ body {
 
   .layout-btn {
     @apply flex items-center justify-center rounded;
-    width: 22px;
-    height: 22px;
-    font-size: 14px;
+    width: 18px;
+    height: 18px;
+    font-size: 13px;
     line-height: 1;
     color: var(--vsc-fg-muted);
   }
