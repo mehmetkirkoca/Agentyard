@@ -3100,7 +3100,17 @@ ipcRenderer.on("load-persisted-sessions", (_event, persistedSessions: PersistedS
   paneState = pruneSessions(paneState, new Set(sessions.keys()));
   savePaneState();
   renderPanes();
+  reopenVisibleSessions();
 });
+
+// At startup the panes show their saved sessions without a PTY: reopen them instead of waiting for
+// a click. Background tabs stay closed. Main refuses a conversation open elsewhere (VSCode/terminal).
+// The focused pane goes last, since each reopened session takes the focus.
+function reopenVisibleSessions() {
+  const focused = paneState.focused;
+  const leafIds = [...paneElements.keys()].sort((a, b) => Number(a === focused) - Number(b === focused));
+  for (const leafId of leafIds) reopenPaneSession(leafId);
+}
 
 ipcRenderer.on("projects-updated", (_event, updated: Project[]) => {
   projects = updated;
