@@ -552,6 +552,49 @@ body {
     @apply flex flex-none items-stretch;
     height: 35px;
     background-color: var(--vsc-sidebar);
+    /* Frameless window: the empty parts of the tab row (and the sidebar header) move the window */
+    -webkit-app-region: drag;
+  }
+
+  .sidebar-header {
+    -webkit-app-region: drag;
+  }
+
+  .tabs-row button,
+  .tabs-row .tab,
+  .sidebar-header button {
+    -webkit-app-region: no-drag;
+  }
+
+  /* Minimal window controls at the far right of the tab row */
+  .window-controls {
+    @apply flex flex-none items-stretch;
+    margin-left: 4px;
+  }
+
+  .window-control-btn {
+    @apply flex items-center justify-center;
+    width: 40px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .window-control-btn:hover {
+    background-color: rgba(90, 93, 94, 0.31);
+    color: var(--vsc-fg-strong);
+  }
+
+  .window-control-btn.window-close-btn:hover {
+    background-color: #e81123;
+    color: #ffffff;
+  }
+
+  .window-control-btn .icon-restore,
+  body.window-maximized .window-control-btn .icon-maximize {
+    display: none;
+  }
+
+  body.window-maximized .window-control-btn .icon-restore {
+    display: block;
   }
 
   .sidebar-toggle-btn {

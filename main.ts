@@ -1733,6 +1733,16 @@ ipcMain.handle("get-dir-info", async (_event, projectId: string): Promise<DirInf
   }
 });
 
+// Window controls of the frameless window (buttons at the right of the tab row)
+ipcMain.on("window-control", (_event, action: "minimize" | "toggle-maximize" | "close") => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (action === "minimize") mainWindow.minimize();
+  else if (action === "toggle-maximize") {
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+  } else if (action === "close") mainWindow.close();
+});
+
 const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -1740,11 +1750,19 @@ const createWindow = () => {
     // The default File/Edit/View menu bar takes the system (GTK) font and offers nothing
     // Agentyard-specific: keep it hidden, Alt reveals it (its shortcuts keep working)
     autoHideMenuBar: true,
+    // Own minimal window controls at the right of the tab row: the system frame takes its button
+    // layout from GSettings under Electron's XDG_CURRENT_DESKTOP=Unity override, which on Ubuntu
+    // puts them on the left. Moving the window stays with the compositor (-webkit-app-region: drag).
+    frame: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+
+  const sendMaximized = () => mainWindow.webContents.send("window-maximized-changed", mainWindow.isMaximized());
+  mainWindow.on("maximize", sendMaximized);
+  mainWindow.on("unmaximize", sendMaximized);
 
   mainWindow.loadFile("index.html");
 
@@ -1757,6 +1775,7 @@ const createWindow = () => {
     lastExternallyOpen = new Set();
     lastSyncWarnings = [];
     if (migrationWarnings.length > 0) mainWindow.webContents.send("sync-warnings", migrationWarnings);
+    sendMaximized();
     startTranscriptSync();
   });
 

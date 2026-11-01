@@ -3843,6 +3843,23 @@ confirmApplyToProjectBtn?.addEventListener("click", async () => {
   }
 });
 
+// Minimize / maximize-restore / close of the frameless window (right of the tab row)
+(function initWindowControls() {
+  const bind = (id: string, action: "minimize" | "toggle-maximize" | "close") =>
+    document.getElementById(id)?.addEventListener("click", () => ipcRenderer.send("window-control", action));
+  bind("window-minimize", "minimize");
+  bind("window-maximize", "toggle-maximize");
+  bind("window-close", "close");
+  ipcRenderer.on("window-maximized-changed", (_event, maximized: boolean) => {
+    document.body.classList.toggle("window-maximized", maximized);
+    const btn = document.getElementById("window-maximize");
+    if (btn) {
+      btn.title = maximized ? "Restore" : "Maximize";
+      btn.setAttribute("aria-label", btn.title);
+    }
+  });
+})();
+
 // Sidebar show/hide (button at the left of the tab row, Ctrl+Shift+B); remembered per viewer.
 // Ctrl+B is left to the terminal: Claude Code uses it to background a running command.
 const SIDEBAR_HIDDEN_KEY = "sidebarHidden";
