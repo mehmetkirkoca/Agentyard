@@ -42,29 +42,68 @@ export const MODEL_CHOICES: {alias: string; label: string}[] = [
   {alias: "haiku", label: "Haiku 5.5"},
 ];
 
+/** Gemini CLI model aliases (what `/model set` and `-m` take); Gemini resolves them to a concrete model. */
 export const GEMINI_MODEL_CHOICES: {alias: string; label: string}[] = [
-  {alias: "gemini-2.5-pro", label: "Gemini 2.5 Pro"},
-  {alias: "gemini-2.5-flash", label: "Gemini 2.5 Flash"},
-  {alias: "gemini-2.5-flash-thinking", label: "Gemini 2.5 Flash Thinking"},
-  {alias: "gemini-1.5-pro", label: "Gemini 1.5 Pro"},
-  {alias: "gemini-1.5-flash", label: "Gemini 1.5 Flash"},
+  {alias: "auto", label: "Auto"},
+  {alias: "pro", label: "Pro"},
+  {alias: "flash", label: "Flash"},
+  {alias: "flash-lite", label: "Flash Lite"},
 ];
 
-export const GEMINI_PERMISSION_MODES: {mode: string; label: string; icon: string}[] = [
+/** Gemini CLI approval modes, as --approval-mode names them. */
+export type GeminiApprovalMode = "default" | "auto_edit" | "plan" | "yolo";
+
+/** Modes offered in the toolbar menu: Shift+Tab cycles the first three, Ctrl+Y toggles YOLO. */
+export const GEMINI_PERMISSION_MODES: {mode: GeminiApprovalMode; label: string; icon: string}[] = [
   {mode: "default", label: "Default", icon: "✋"},
-  {mode: "auto_edit", label: "Auto Edit", icon: "✎"},
-  {mode: "yolo", label: "YOLO", icon: "⏵⏵"},
+  {mode: "auto_edit", label: "Auto edit", icon: "✎"},
   {mode: "plan", label: "Plan", icon: "⏸"},
+  {mode: "yolo", label: "YOLO", icon: "⏵⏵"},
 ];
+
+// The mode line above Gemini CLI's input box starts with the mode name, then the key hint for the
+// next one; anchored at the line start so text typed in the input box below never matches
+const GEMINI_MODE_FOOTERS: [RegExp, GeminiApprovalMode][] = [
+  [/^\s*YOLO\s+Ctrl\+Y\b/i, "yolo"],
+  [/^\s*auto-accept edits\s+Shift\+Tab to/i, "auto_edit"],
+  [/^\s*plan\s+Shift\+Tab to manual/i, "plan"],
+  [/^\s*Shift\+Tab to accept edits/i, "default"],
+];
+
+/**
+ * The approval mode shown on Gemini CLI's mode line (the last lines of the terminal). The lowest
+ * matching line wins; undefined when no mode line is on screen (e.g. while a dialog is open).
+ */
+export function parseGeminiApprovalMode(lines: string[]): GeminiApprovalMode | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    for (const [pattern, mode] of GEMINI_MODE_FOOTERS) {
+      if (pattern.test(lines[i])) return mode;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Next key toward `target` from `current`: Ctrl+Y toggles YOLO (and leaves it for default),
+ * Shift+Tab cycles default -> auto_edit -> plan -> default. Null when already there.
+ */
+export function geminiModeKey(current: GeminiApprovalMode, target: GeminiApprovalMode): "\x19" | "\x1b[Z" | null {
+  if (current === target) return null;
+  if (current === "yolo" || target === "yolo") return "\x19";
+  return "\x1b[Z";
+}
 
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
 /** "claude-opus-5-5" -> "Opus 5.5"; unknown ids are returned unchanged. */
 export function modelLabel(id: string): string {
+  const geminiAlias = GEMINI_MODEL_CHOICES.find(c => c.alias === id);
+  if (geminiAlias) return geminiAlias.label;
+  // "gemini-3.5-flash-lite" -> "Gemini 3.5 Flash Lite"
   if (id.toLowerCase().startsWith("gemini")) {
     return id
       .split("-")
-      .map(part => (part.toLowerCase() === "gemini" ? "Gemini" : part.charAt(0).toUpperCase() + part.slice(1)))
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
       .join(" ");
   }
   const match = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(id);
@@ -244,27 +283,89 @@ export function listSlashCommands(opts: {home: string; projectDir?: string}): Sl
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Gemini CLI built-in commands (v0.66), with their own descriptions shortened. */
 export const GEMINI_BUILT_IN_COMMANDS: [string, string][] = [
-  ["help", "Show help and available commands"],
-  ["model", "Choose Gemini model"],
-  ["clear", "Clear conversation history"],
-  ["resume", "Browse and resume sessions"],
-  ["settings", "View and edit settings"],
+  ["about", "Show version info"],
+  ["agents", "Manage agents"],
+  ["auth", "Sign in or change the authentication method"],
+  ["chat", "Manage conversation checkpoints"],
+  ["clear", "Clear the screen and start a new session"],
+  ["commands", "Manage custom slash commands"],
+  ["compress", "Replace the context with a summary"],
+  ["copy", "Copy the last result to the clipboard"],
+  ["directory", "Manage workspace directories"],
+  ["export-session", "Export the session to a JSON file"],
+  ["extensions", "Manage extensions"],
+  ["help", "Show help"],
+  ["hooks", "Manage hooks"],
+  ["init", "Create a GEMINI.md"],
   ["mcp", "Manage MCP servers"],
-  ["compress", "Compress conversation context"],
-  ["auth", "Manage authentication"],
-  ["stats", "Show token usage statistics"],
-  ["memory", "Edit project memory"],
-  ["tools", "Show available tools"],
+  ["memory", "Manage memory"],
+  ["model", "Choose the model"],
+  ["permissions", "Manage folder trust and permissions"],
+  ["plan", "Switch to plan mode"],
+  ["policies", "Manage policies"],
+  ["resume", "Resume a conversation"],
+  ["rewind", "Rewind the conversation"],
+  ["settings", "View and edit settings"],
   ["skills", "Manage agent skills"],
-  ["hooks", "Manage Gemini hooks"],
+  ["stats", "Show session stats"],
+  ["tools", "List available tools"],
+  ["voice", "Toggle voice dictation"],
 ];
 
+/** `description = "..."` of a Gemini command TOML file, else "" (Gemini then shows a default). */
+export function parseTomlDescription(text: string): string {
+  const match = /^\s*description\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')/m.exec(text);
+  if (!match) return "";
+  return match[1] !== undefined ? match[1].replace(/\\(["\\])/g, "$1") : match[2];
+}
+
+/**
+ * Gemini CLI custom commands: <dir>/**\/*.toml, a subfolder adding a "folder:" namespace, plus
+ * <skillsDir>/<name>/SKILL.md skills, which Gemini also offers as slash commands.
+ */
+function geminiCommandsUnder(commandsDir: string, skillsDirs: string[], source: SlashCommand["source"]): SlashCommand[] {
+  const found: SlashCommand[] = [];
+  const walk = (dir: string, namespace: string[]) => {
+    for (const entry of listDir(dir)) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, [...namespace, entry.name]);
+      else if (entry.name.endsWith(".toml")) {
+        const text = readText(full);
+        if (text === undefined) continue;
+        const name = [...namespace, entry.name.slice(0, -5)].join(":");
+        found.push({name, description: parseTomlDescription(text) || `Custom command from ${entry.name}`, source});
+      }
+    }
+  };
+  walk(commandsDir, []);
+  for (const skillsDir of skillsDirs) {
+    for (const entry of listDir(skillsDir)) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const text = readText(path.join(skillsDir, entry.name, "SKILL.md"));
+      if (text === undefined) continue;
+      found.push({name: entry.name, description: parseCommandDescription(text), source});
+    }
+  }
+  return found;
+}
+
+/**
+ * Slash commands Gemini CLI offers in a session: built-ins, then user (~/.gemini, ~/.agents) and
+ * project (.gemini, .agents) commands and skills. A project entry replaces a user entry of the
+ * same name. Sorted by name.
+ */
 export function listGeminiSlashCommands(opts: {home: string; projectDir?: string}): SlashCommand[] {
   const byName = new Map<string, SlashCommand>();
   const add = (list: SlashCommand[]) => list.forEach(c => byName.set(c.name, c));
   add(GEMINI_BUILT_IN_COMMANDS.map(([name, description]) => ({name, description, source: "built-in" as const})));
-  add(commandsUnder(path.join(opts.home, ".gemini"), "", "user"));
-  if (opts.projectDir) add(commandsUnder(path.join(opts.projectDir, ".gemini"), "", "project"));
+  const addFrom = (root: string, source: SlashCommand["source"]) => add(geminiCommandsUnder(
+    path.join(root, ".gemini", "commands"),
+    [path.join(root, ".gemini", "skills"), path.join(root, ".agents", "skills")],
+    source,
+  ));
+  addFrom(opts.home, "user");
+  if (opts.projectDir) addFrom(opts.projectDir, "project");
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }

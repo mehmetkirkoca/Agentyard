@@ -1,4 +1,4 @@
-import {currentPromptIndex, findPromptRows, hasJumpToBottom, seekStep} from "./sticky-prompt";
+import {currentPromptIndex, findPromptRows, GEMINI_PROMPT_GLYPH, hasJumpToBottom, seekStep} from "./sticky-prompt";
 
 describe("findPromptRows", () => {
   it("matches echoed prompt rows to transcript prompts", () => {
@@ -33,6 +33,21 @@ describe("findPromptRows", () => {
       {row: 0, index: 0},
       {row: 2, index: 2},
     ]);
+  });
+
+  it("does not take Claude's quoted '> ' lines or Gemini's '✦ ' answers for prompts", () => {
+    expect(findPromptRows(["> soru", "✦ soru"], ["soru"])).toEqual([]);
+  });
+
+  it("matches Gemini CLI's indented ' > ' echo with the Gemini glyph", () => {
+    // as Gemini CLI v0.66 draws a turn: echo, answer, then the input box
+    const lines = [
+      " > Reply with just the word: hi",
+      " ✦ hi",
+      " >   Type your message or @path/to/file",
+    ];
+    expect(findPromptRows(lines, ["Reply with just the word: hi"], GEMINI_PROMPT_GLYPH)).toEqual([{row: 0, index: 0}]);
+    expect(findPromptRows(lines, ["Reply with just the word: hi"])).toEqual([]);
   });
 });
 

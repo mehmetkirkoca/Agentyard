@@ -1,5 +1,7 @@
+/** Claude Code echoes each submitted prompt as "❯ <first line>"; the input box uses the same glyph. */
 export const PROMPT_GLYPH = "❯ ";
-export const PROMPT_GLYPHS = ["❯ ", "> ", "✦ "];
+/** Gemini CLI echoes a prompt indented, as " > <first line>"; its input box looks the same. */
+export const GEMINI_PROMPT_GLYPH = " > ";
 
 export interface PromptRow {
   /** screen row of the echoed prompt */
@@ -15,15 +17,14 @@ const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
  * text is the start of a known prompt (an exact match wins), so the input box never matches. Rows
  * and prompts are aligned from the bottom, so a repeated prompt maps to its latest occurrence.
  */
-export function findPromptRows(lines: string[], prompts: string[]): PromptRow[] {
+export function findPromptRows(lines: string[], prompts: string[], glyph: string = PROMPT_GLYPH): PromptRow[] {
   const normalized = prompts.map(normalize);
   const result: PromptRow[] = [];
   let cursor = prompts.length - 1;
   for (let row = lines.length - 1; row >= 0 && cursor >= 0; row--) {
     const line = lines[row];
-    const matchedGlyph = PROMPT_GLYPHS.find(g => line.startsWith(g));
-    if (!matchedGlyph) continue;
-    const echoed = normalize(line.slice(matchedGlyph.length));
+    if (!line.startsWith(glyph)) continue;
+    const echoed = normalize(line.slice(glyph.length));
     if (!echoed) continue;
     let index = -1;
     for (let i = cursor; i >= 0 && index < 0; i--) {
@@ -64,10 +65,11 @@ export function currentPromptIndex(
   prompts: string[],
   scrolledUp: boolean,
   previous: number | null,
+  glyph: string = PROMPT_GLYPH,
 ): number | null {
   if (prompts.length === 0) return null;
   if (!scrolledUp) return prompts.length - 1;
-  const first = findPromptRows(lines, prompts)[0];
+  const first = findPromptRows(lines, prompts, glyph)[0];
   if (!first) return previous === null ? null : Math.min(previous, prompts.length - 1);
   if (first.row < CURRENT_PROMPT_ROWS) return first.index;
   return first.index > 0 ? first.index - 1 : null;
@@ -89,9 +91,10 @@ export function seekStep(
   skipRows: number,
   scrolledUp: boolean,
   current: number | null,
+  glyph: string = PROMPT_GLYPH,
 ): SeekStep {
   const down: SeekStep = scrolledUp ? "down" : "done";
-  const rows = findPromptRows(lines.slice(skipRows), prompts).map(r => ({...r, row: r.row + skipRows}));
+  const rows = findPromptRows(lines.slice(skipRows), prompts, glyph).map(r => ({...r, row: r.row + skipRows}));
   const hit = rows.find(r => r.index === target);
   if (hit) return hit.row < CURRENT_PROMPT_ROWS ? "done" : down;
   const earlier = rows.some(r => r.index < target);

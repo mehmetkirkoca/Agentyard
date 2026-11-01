@@ -6,8 +6,8 @@ import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus,
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady} from "./terminal-utils";
-import {currentPromptIndex, hasJumpToBottom, seekStep} from "./sticky-prompt";
-import {EFFORT_LEVELS, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
+import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
+import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
 import {
   applyTemplate,
   assignSession,
@@ -424,6 +424,8 @@ function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptCont
   let rescanTimer: NodeJS.Timeout | null = null;
 
   let seekToken = 0;
+  // Each CLI echoes prompts with its own glyph
+  const glyph = () => sessions.get(sessionId)?.config.codingAgent === "gemini" ? GEMINI_PROMPT_GLYPH : PROMPT_GLYPH;
 
   // Only the visible rows: fullscreen Claude Code scrolls its own view, so the screen is all there is
   const visibleLines = () => {
@@ -443,7 +445,7 @@ function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptCont
   const rescan = () => {
     rescanTimer = null;
     const lines = visibleLines();
-    const next = currentPromptIndex(lines, prompts, isScrolledUp(lines), index);
+    const next = currentPromptIndex(lines, prompts, isScrolledUp(lines), index, glyph());
     if (next === index) return;
     index = next;
     renderPanePromptOf(sessionId);
@@ -498,8 +500,8 @@ function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptCont
       for (let step = 0; step < SEEK_MAX_STEPS && token === seekToken; step++) {
         const lines = visibleLines();
         const scrolledUp = isScrolledUp(lines);
-        current = currentPromptIndex(lines, prompts, scrolledUp, current);
-        const next = seekStep(lines, prompts, target, skipRows, scrolledUp, current);
+        current = currentPromptIndex(lines, prompts, scrolledUp, current, glyph());
+        const next = seekStep(lines, prompts, target, skipRows, scrolledUp, current, glyph());
         // A turn means the target was passed without being recognised: stop next to it
         if (next === "done" || (last !== null && next !== last)) break;
         last = next;
@@ -637,15 +639,6 @@ function createTerminalUI(sessionId: string) {
 
   term.onData((data) => {
     ipcRenderer.send("session-input", sessionId, data);
-    if (data.includes("\r")) {
-      const s = sessions.get(sessionId);
-      if (s?.config.codingAgent === "gemini") {
-        setTimeout(() => {
-          stickyPrompts.get(sessionId)?.refreshPrompts();
-          void refreshSessionModel(sessionId);
-        }, 800);
-      }
-    }
   });
 
   // Listen for bell character to mark unread activity
@@ -719,19 +712,27 @@ function indicatorStatusClass(session: Session): string {
   return `status-${session.status ?? SessionStatus.IDLE}`;
 }
 
-function refreshSessionIndicator(sessionId: string) {
+// root: a sidebar row still being built, not yet in the document
+function refreshSessionIndicator(sessionId: string, root?: HTMLElement) {
   const session = sessions.get(sessionId);
-  const indicator = document.getElementById(`sidebar-${sessionId}`)?.querySelector(".session-indicator");
+  const row = root ?? document.getElementById(`sidebar-${sessionId}`);
+  const indicator = row?.querySelector(".session-indicator");
   if (!session || !indicator) return;
   indicator.classList.remove(...STATUS_CLASSES);
   indicator.classList.add(indicatorStatusClass(session));
 }
 
-// For Claude sessions the tab activity/unread classes are derived from the hook-based status
+// Claude Code and Gemini CLI report their state through hooks (status dots); other agents are
+// judged from their terminal output
+function hasHookStatus(config: SessionConfig): boolean {
+  return config.codingAgent === "claude" || config.codingAgent === "gemini";
+}
+
+// For hook-driven sessions the tab activity/unread classes are derived from the hook-based status
 function applyTabStatus(sessionId: string) {
   const session = sessions.get(sessionId);
   const tab = document.getElementById(`tab-${sessionId}`);
-  if (!session || !tab || session.config.codingAgent !== "claude") return;
+  if (!session || !tab || !hasHookStatus(session.config)) return;
   tab.classList.toggle("activity", session.status === SessionStatus.RUNNING);
   tab.classList.toggle("unread", session.status === SessionStatus.WAITING || session.status === SessionStatus.DONE);
 }
@@ -930,7 +931,8 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
   });
 
   list.appendChild(item);
-  refreshSessionIndicator(sessionId);
+  // The sidebar is rebuilt in detached groups, so the row cannot be found by id yet
+  refreshSessionIndicator(sessionId, item);
   if (sessionId === activeSessionId) item.classList.add("active");
 }
 
@@ -2087,18 +2089,34 @@ async function pasteClipboardImageToPane(leafId: number) {
   }
 }
 
-function toggleVoiceMode(leafId: number) {
+async function toggleVoiceMode(leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
-  ipcRenderer.send("session-input", session.id, "/voice\r");
-  session.terminal?.focus();
+  if (session.config.codingAgent === "gemini") {
+    // Without experimental.voiceMode Gemini sends "/voice" to the model as a prompt
+    let enabled = false;
+    try {
+      enabled = await ipcRenderer.invoke("gemini-voice-enabled", session.id) as boolean;
+    } catch (error) {
+      console.error(`gemini-voice-enabled failed for ${session.id}:`, error);
+    }
+    if (!enabled) {
+      showToast("Gemini voice is experimental and off: turn on \"Voice Mode\" in /settings (Experimental), i.e. experimental.voiceMode in ~/.gemini/settings.json", "warning");
+      session.terminal?.focus();
+      return;
+    }
+    submitToSession(session.id, "/voice");
+    showToast("Toggled Gemini voice dictation — the terminal shows whether it is on");
+    return;
+  }
+  submitToSession(session.id, "/voice");
   showToast("Toggled Claude voice mode — the terminal shows whether it is on (hold Space to talk)");
 }
 
 // Toolbar at the bottom of each pane, under Claude's own prompt box: attach, voice, slash commands,
 // and the session's model and permission mode. Choices are sent to the terminal (/model, /effort,
 // Shift+Tab); the mode is read back from Claude Code's footer line, the model from the transcript.
-const sessionModes = new Map<string, PermissionMode>();
+const sessionModes = new Map<string, PermissionMode | GeminiApprovalMode>();
 const sessionModels = new Map<string, {model?: string; effort?: string}>();
 const modeReadTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -2118,7 +2136,7 @@ function createPaneToolbar(leafId: number): HTMLElement {
       focusPaneAt(leafId);
       const action = btn.dataset.action;
       if (action === "attach") openAttachMenu(btn, leafId);
-      else if (action === "voice") toggleVoiceMode(leafId);
+      else if (action === "voice") void toggleVoiceMode(leafId);
       else if (action === "commands") void openCommandMenu(btn, leafId);
       else if (action === "model") openModelMenu(btn, leafId);
       else if (action === "mode") openModeMenu(btn, leafId);
@@ -2141,8 +2159,8 @@ function renderPaneToolbar(pane: HTMLElement, leafId: number, shown: boolean) {
   (modelChip.querySelector(".chip-main") as HTMLElement).textContent = info?.model ? modelLabel(info.model) : "Model";
   (modelChip.querySelector(".chip-sub") as HTMLElement).textContent = info?.effort ? capitalize(info.effort) : "";
   const mode = (session && sessionModes.get(session.id)) || (isGemini ? "default" : "manual");
-  const modesList = isGemini ? (GEMINI_PERMISSION_MODES as any[]) : PERMISSION_MODES;
-  const entry = modesList.find((m: any) => m.mode === mode) ?? {icon: "⏵", label: mode};
+  const modesList: {mode: string; label: string; icon: string}[] = isGemini ? GEMINI_PERMISSION_MODES : PERMISSION_MODES;
+  const entry = modesList.find(m => m.mode === mode) ?? {icon: "⏵", label: mode};
   (modeChip.querySelector(".chip-icon") as HTMLElement).textContent = entry.icon;
   (modeChip.querySelector(".chip-main") as HTMLElement).textContent = entry.label;
   if (session && !sessionModels.has(session.id)) void refreshSessionModel(session.id);
@@ -2172,10 +2190,15 @@ async function refreshSessionModel(sessionId: string) {
   renderToolbarsOf(sessionId);
 }
 
-// The last rows of the screen (not the scrolled viewport): Claude Code's footer with the mode line
-function terminalBottomLines(term: Terminal, count: number): string[] {
+// The last rows of the screen (not the scrolled viewport): Claude Code's footer with the mode line.
+// skipBlankTail: Gemini CLI draws inline and leaves the rows under its footer empty, so the count
+// starts at the last non-empty row.
+function terminalBottomLines(term: Terminal, count: number, skipBlankTail = false): string[] {
   const buffer = term.buffer.active;
-  const end = buffer.baseY + term.rows;
+  let end = buffer.baseY + term.rows;
+  if (skipBlankTail) {
+    while (end > buffer.baseY && !(buffer.getLine(end - 1)?.translateToString(true) ?? "").trim()) end--;
+  }
   const lines: string[] = [];
   for (let y = Math.max(0, end - count); y < end; y++) {
     lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
@@ -2183,9 +2206,12 @@ function terminalBottomLines(term: Terminal, count: number): string[] {
   return lines;
 }
 
-function readSessionMode(sessionId: string): PermissionMode | undefined {
-  const term = sessions.get(sessionId)?.terminal;
-  if (!term || !term.element) return undefined;
+function readSessionMode(sessionId: string): PermissionMode | GeminiApprovalMode | undefined {
+  const session = sessions.get(sessionId);
+  const term = session?.terminal;
+  if (!session || !term || !term.element) return undefined;
+  // Gemini CLI's mode line sits above its input box and the workspace footer
+  if (session.config.codingAgent === "gemini") return parseGeminiApprovalMode(terminalBottomLines(term, 10, true));
   return parsePermissionMode(terminalBottomLines(term, 4));
 }
 
@@ -2216,6 +2242,27 @@ async function setSessionMode(sessionId: string, target: PermissionMode) {
   }
   const label = PERMISSION_MODES.find(m => m.mode === target)?.label ?? target;
   showToast(`"${label}" mode is not available in this session`, "warning");
+  scheduleModeRead(sessionId);
+}
+
+// Gemini CLI: Ctrl+Y toggles YOLO, Shift+Tab cycles the others; each key is checked on the mode line.
+// Gemini skips plan while it is busy, and shows no mode line while a dialog is open.
+async function setGeminiMode(sessionId: string, target: GeminiApprovalMode) {
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let i = 0; i <= GEMINI_PERMISSION_MODES.length + 1; i++) {
+    const current = readSessionMode(sessionId) as GeminiApprovalMode | undefined;
+    if (!current) break;
+    const key = geminiModeKey(current, target);
+    if (!key) {
+      sessionModes.set(sessionId, current);
+      renderToolbarsOf(sessionId);
+      return;
+    }
+    ipcRenderer.send("session-input", sessionId, key);
+    await wait(250);
+  }
+  const label = GEMINI_PERMISSION_MODES.find(m => m.mode === target)?.label ?? target;
+  showToast(`Could not switch to "${label}" mode — Gemini may be busy or showing a dialog`, "warning");
   scheduleModeRead(sessionId);
 }
 
@@ -2298,6 +2345,20 @@ function sendToSession(sessionId: string, text: string) {
   sessions.get(sessionId)?.terminal?.focus();
 }
 
+// Gemini CLI takes an Enter that follows the previous key within 30 ms (FAST_RETURN_TIMEOUT) for a
+// pasted newline, so its Enter goes separately, after a pause
+const GEMINI_SUBMIT_DELAY_MS = 100;
+
+/** Type a slash command into the session's input and submit it. */
+function submitToSession(sessionId: string, command: string) {
+  if (sessions.get(sessionId)?.config.codingAgent !== "gemini") {
+    sendToSession(sessionId, command + "\r");
+    return;
+  }
+  sendToSession(sessionId, command);
+  setTimeout(() => ipcRenderer.send("session-input", sessionId, "\r"), GEMINI_SUBMIT_DELAY_MS);
+}
+
 function openModelMenu(button: HTMLElement, leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
@@ -2309,7 +2370,7 @@ function openModelMenu(button: HTMLElement, leafId: number) {
   const choices = isGemini ? GEMINI_MODEL_CHOICES : MODEL_CHOICES;
   for (const choice of choices) {
     menu.appendChild(menuItem(choice.label, choice.label === currentLabel, () => {
-      sendToSession(session.id, `/model ${choice.alias}\r`);
+      submitToSession(session.id, isGemini ? `/model set ${choice.alias}` : `/model ${choice.alias}`);
       sessionModels.set(session.id, {...info, model: choice.alias});
       renderToolbarsOf(session.id);
     }));
@@ -2318,7 +2379,7 @@ function openModelMenu(button: HTMLElement, leafId: number) {
     menu.appendChild(menuHeading("Effort"));
     for (const level of EFFORT_LEVELS) {
       menu.appendChild(menuItem(capitalize(level), level === info.effort, () => {
-        sendToSession(session.id, `/effort ${level}\r`);
+        submitToSession(session.id, `/effort ${level}`);
         sessionModels.set(session.id, {...sessionModels.get(session.id), effort: level});
         renderToolbarsOf(session.id);
       }));
@@ -2332,15 +2393,13 @@ function openModeMenu(button: HTMLElement, leafId: number) {
   if (!session) return;
   const isGemini = session.config.codingAgent === "gemini";
   if (isGemini) {
-    const current = sessionModes.get(session.id) ?? "default";
+    const current = readSessionMode(session.id) ?? sessionModes.get(session.id) ?? "default";
     const menu = document.createElement("div");
     menu.appendChild(menuHeading("Approval mode"));
     for (const entry of GEMINI_PERMISSION_MODES) {
       menu.appendChild(menuItem(`${entry.icon}  ${entry.label}`, entry.mode === current, () => {
-        sessionModes.set(session.id, entry.mode as any);
-        sendToSession(session.id, `/settings approval-mode ${entry.mode}\r`);
+        void setGeminiMode(session.id, entry.mode);
         session.terminal?.focus();
-        renderToolbarsOf(session.id);
       }));
     }
     showToolbarMenu(button, menu);
@@ -2769,7 +2828,7 @@ function syncActiveSession(force: boolean) {
   // Clear unread and activity status when switching to this session
   // Tell main which session is being viewed (any agent, so a stale Claude id is replaced)
   ipcRenderer.send("session-viewed", liveId);
-  if (session.config.codingAgent === "claude") {
+  if (hasHookStatus(session.config)) {
     applyTabStatus(liveId);
   } else {
     clearUnreadStatus(liveId);
@@ -3018,15 +3077,10 @@ ipcRenderer.on("session-output", (_event, sessionId: string, data: string) => {
     const filteredData = data.replace(/\x1b\[3J/g, '');
 
     session.terminal.write(filteredData);
-    if (session.config.codingAgent === "claude") scheduleModeRead(sessionId);
-    if (session.config.codingAgent === "gemini") {
-      const sticky = stickyPrompts.get(sessionId);
-      if (sticky) sticky.refreshPrompts();
-      void refreshSessionModel(sessionId);
-    }
+    if (hasHookStatus(session.config)) scheduleModeRead(sessionId);
 
     // Only mark as unread/activity if this is not the active session
-    if (session.config.codingAgent !== "claude" && !isShownInPane(sessionId) && session.hasActivePty) {
+    if (!hasHookStatus(session.config) && !isShownInPane(sessionId) && session.hasActivePty) {
       // Show activity spinner while output is coming in
       markSessionActivity(sessionId);
 
@@ -3055,7 +3109,7 @@ ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStat
   if (!session) return;
   session.status = status;
   session.meta = { ...session.meta, status };
-  if (session.config.codingAgent === "claude" || session.config.codingAgent === "gemini") void refreshSessionModel(sessionId);
+  if (hasHookStatus(session.config)) void refreshSessionModel(sessionId);
   refreshSessionIndicator(sessionId);
   applyTabStatus(sessionId);
   renderSidebar();

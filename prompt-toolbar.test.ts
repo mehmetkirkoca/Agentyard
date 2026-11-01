@@ -3,10 +3,14 @@ import * as os from "os";
 import * as path from "path";
 import {
   applyModelLines,
+  geminiModeKey,
+  listGeminiSlashCommands,
   listSlashCommands,
   modelLabel,
   parseCommandDescription,
+  parseGeminiApprovalMode,
   parsePermissionMode,
+  parseTomlDescription,
   readSessionModel,
   SessionModel,
 } from "./prompt-toolbar";
@@ -35,6 +39,13 @@ describe("modelLabel", () => {
     expect(modelLabel("claude-fable-5-1")).toBe("Fable 5.1");
     expect(modelLabel("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5");
     expect(modelLabel("claude-haiku-5-5[1m]")).toBe("Haiku 5.5");
+  });
+
+  it("names Gemini aliases and model ids", () => {
+    expect(modelLabel("flash-lite")).toBe("Flash Lite");
+    expect(modelLabel("auto")).toBe("Auto");
+    expect(modelLabel("gemini-3.5-flash")).toBe("Gemini 3.5 Flash");
+    expect(modelLabel("gemini-3.1-pro-preview")).toBe("Gemini 3.1 Pro Preview");
   });
 
   it("keeps unknown ids as they are", () => {
@@ -154,5 +165,99 @@ describe("listSlashCommands", () => {
     expect(listSlashCommands({home, projectDir: project}).filter(c => c.name === "deploy"))
       .toEqual([{name: "deploy", description: "Proje", source: "project"}]);
     expect(listSlashCommands({home}).find(c => c.name === "deploy")?.description).toBe("Kullanıcı");
+  });
+});
+
+// Mode lines as Gemini CLI v0.66 draws them above its input box
+const GEMINI_SCREEN = (modeLine: string) => [
+  "────────────────────────────────────────",
+  ` ${modeLine}                                   1 GEMINI.md file`,
+  " >   Type your message or @path/to/file",
+  " workspace (/directory)         branch          sandbox        /model",
+  " ~/Documents/htdocs/agentyard    main            no sandbox     Auto",
+];
+
+describe("parseGeminiApprovalMode", () => {
+  it("reads each mode from Gemini CLI's mode line", () => {
+    expect(parseGeminiApprovalMode(GEMINI_SCREEN("Shift+Tab to accept edits"))).toBe("default");
+    expect(parseGeminiApprovalMode(GEMINI_SCREEN("auto-accept edits Shift+Tab to plan"))).toBe("auto_edit");
+    expect(parseGeminiApprovalMode(GEMINI_SCREEN("auto-accept edits Shift+Tab to manual"))).toBe("auto_edit");
+    expect(parseGeminiApprovalMode(GEMINI_SCREEN("plan Shift+Tab to manual"))).toBe("plan");
+    expect(parseGeminiApprovalMode(GEMINI_SCREEN("YOLO Ctrl+Y"))).toBe("yolo");
+  });
+
+  it("is undefined when no mode line is on screen", () => {
+    expect(parseGeminiApprovalMode([" >   Type your message", ""])).toBeUndefined();
+    expect(parseGeminiApprovalMode([])).toBeUndefined();
+  });
+
+  it("does not take a prompt that mentions a mode for the mode line", () => {
+    expect(parseGeminiApprovalMode([" > why does Shift+Tab to accept edits not work?"])).toBeUndefined();
+    expect(parseGeminiApprovalMode([" Shift+Tab to accept edits", " > auto-accept edits Shift+Tab to plan"])).toBe("default");
+  });
+});
+
+describe("geminiModeKey", () => {
+  it("cycles with Shift+Tab and toggles YOLO with Ctrl+Y", () => {
+    expect(geminiModeKey("default", "default")).toBeNull();
+    expect(geminiModeKey("default", "plan")).toBe("\x1b[Z");
+    expect(geminiModeKey("plan", "auto_edit")).toBe("\x1b[Z");
+    expect(geminiModeKey("default", "yolo")).toBe("\x19");
+    expect(geminiModeKey("auto_edit", "yolo")).toBe("\x19");
+    expect(geminiModeKey("yolo", "plan")).toBe("\x19");
+  });
+});
+
+describe("parseTomlDescription", () => {
+  it("reads basic and literal strings", () => {
+    expect(parseTomlDescription('description = "Commit yaz"\nprompt = """x"""')).toBe("Commit yaz");
+    expect(parseTomlDescription("description='Tek tırnak'")).toBe("Tek tırnak");
+    expect(parseTomlDescription('description = "Say \\"hi\\""')).toBe('Say "hi"');
+  });
+
+  it("is empty without a description", () => {
+    expect(parseTomlDescription('prompt = "x"')).toBe("");
+  });
+});
+
+describe("listGeminiSlashCommands", () => {
+  let home: string;
+  let project: string;
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, text);
+  };
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+    project = fs.mkdtempSync(path.join(os.tmpdir(), "proj-"));
+  });
+  afterEach(() => {
+    fs.rmSync(home, {recursive: true, force: true});
+    fs.rmSync(project, {recursive: true, force: true});
+  });
+
+  it("collects built-ins, .toml commands with folder namespaces, and skills", () => {
+    write(path.join(home, ".gemini/commands/commit.toml"), 'description = "Commit yaz"\nprompt = "x"');
+    write(path.join(home, ".gemini/commands/git/push.toml"), 'prompt = "x"');
+    write(path.join(home, ".gemini/commands/notes.md"), "Claude formatı, Gemini okumaz");
+    write(path.join(home, ".gemini/skills/explorer/SKILL.md"), "---\ndescription: Kodu gez\n---\n");
+    write(path.join(home, ".agents/skills/shared/SKILL.md"), "---\ndescription: Ortak\n---\n");
+    write(path.join(project, ".gemini/commands/deploy.toml"), 'description = "Deploy et"');
+
+    const byName = new Map(listGeminiSlashCommands({home, projectDir: project}).map(c => [c.name, c]));
+    expect(byName.get("compress")?.source).toBe("built-in");
+    expect(byName.get("commit")).toEqual({name: "commit", description: "Commit yaz", source: "user"});
+    expect(byName.get("git:push")).toEqual({name: "git:push", description: "Custom command from push.toml", source: "user"});
+    expect(byName.has("notes")).toBe(false);
+    expect(byName.get("explorer")).toEqual({name: "explorer", description: "Kodu gez", source: "user"});
+    expect(byName.get("shared")?.description).toBe("Ortak");
+    expect(byName.get("deploy")).toEqual({name: "deploy", description: "Deploy et", source: "project"});
+  });
+
+  it("lets a project command override a user command of the same name", () => {
+    write(path.join(home, ".gemini/commands/deploy.toml"), 'description = "Kullanıcı"');
+    write(path.join(project, ".gemini/commands/deploy.toml"), 'description = "Proje"');
+    expect(listGeminiSlashCommands({home, projectDir: project}).filter(c => c.name === "deploy"))
+      .toEqual([{name: "deploy", description: "Proje", source: "project"}]);
   });
 });

@@ -40,6 +40,18 @@ describe("nextStatus", () => {
   it("other notifications -> waiting", () => {
     expect(nextStatus(SessionStatus.RUNNING, ev("Notification"), false)).toBe(SessionStatus.WAITING);
   });
+  it("follows Gemini CLI's hook sequence for a turn with an approval", () => {
+    // as recorded from Gemini CLI v0.66: BeforeAgent, Notification(ToolPermission), AfterTool, AfterAgent
+    let status: SessionStatus | undefined = SessionStatus.IDLE;
+    status = nextStatus(status, ev("BeforeAgent"), false);
+    expect(status).toBe(SessionStatus.RUNNING);
+    status = nextStatus(status, ev("Notification", "ToolPermission"), false);
+    expect(status).toBe(SessionStatus.WAITING);
+    status = nextStatus(status, ev("AfterTool"), false);
+    expect(status).toBe(SessionStatus.RUNNING);
+    expect(nextStatus(status, ev("AfterAgent"), false)).toBe(SessionStatus.DONE);
+    expect(nextStatus(status, ev("AfterAgent"), true)).toBe(SessionStatus.IDLE);
+  });
   it("unknown event keeps current status", () => {
     expect(nextStatus(SessionStatus.DONE, ev("SessionStart"), false)).toBe(SessionStatus.DONE);
   });

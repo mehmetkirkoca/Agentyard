@@ -10,7 +10,7 @@ import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
-import {buildGeminiCommand, readGeminiPromptsAndModel} from "./gemini-launch";
+import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {getBranches, getCurrentBranch} from "./git-utils";
@@ -245,8 +245,19 @@ function processStatusFile(filePath: string): void {
   }
 }
 
+// Start a run with an empty status file: its hooks append to it, earlier events are already applied.
+// Gemini's hook only writes to a file that exists, so this also turns status reporting on for it.
+function resetStatusFile(sessionUuid: string): void {
+  const statusFile = statusFilePath(sessionUuid);
+  fs.mkdirSync(path.dirname(statusFile), {recursive: true});
+  fs.writeFileSync(statusFile, "");
+  statusFileOffsets.set(statusFile, 0);
+}
+
 function startStatusWatcher(): void {
   const statusDir = path.join(appHome(), "status");
+  const extensionError = ensureGeminiStatusExtension(statusDir);
+  if (extensionError) console.error(extensionError);
   try {
     fs.mkdirSync(statusDir, {recursive: true});
     // Existing files: start from the end so old history is not replayed
@@ -676,10 +687,7 @@ function spawnSessionPty(
             const statusFile = statusFilePath(sessionUuid);
             try {
               fs.mkdirSync(path.dirname(hookPath), {recursive: true});
-              fs.mkdirSync(path.dirname(statusFile), {recursive: true});
-              // A new run starts a fresh status file: earlier events are already applied.
-              fs.writeFileSync(statusFile, "");
-              statusFileOffsets.set(statusFile, 0);
+              resetStatusFile(sessionUuid);
               fs.writeFileSync(hookPath, JSON.stringify(buildHookSettings(statusFile), null, 2));
               settingsPath = hookPath;
             } catch (error) {
@@ -701,6 +709,11 @@ function spawnSessionPty(
               spawnMcpPoller(sessionId, projectDir);
             }
           } else if (config.codingAgent === "gemini") {
+            try {
+              resetStatusFile(sessionUuid);
+            } catch (error) {
+              console.error(`Error preparing status file for Gemini session ${sessionUuid}:`, error);
+            }
             const geminiCmd = buildGeminiCommand({
               sessionUuid,
               isNew: isNewSession,
@@ -1243,6 +1256,13 @@ ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
   }
 });
 
+// Pane toolbar voice button: Gemini CLI has /voice only with experimental.voiceMode on
+ipcMain.handle("gemini-voice-enabled", (_event, sessionId: string): boolean => {
+  const session = getPersistedSessions().find(s => s.id === sessionId);
+  if (!session) return false;
+  return isGeminiVoiceModeEnabled(os.homedir(), session.worktreePath || session.config.projectDir);
+});
+
 // Pane toolbar: model and effort of the session's last reply, read from its transcript
 const sessionModels = new Map<string, SessionModel>();
 
@@ -1251,8 +1271,8 @@ ipcMain.handle("get-session-model", (_event, sessionId: string): {model?: string
   if (!session) return {};
   if (session.config.codingAgent === "gemini") {
     const dir = session.worktreePath || session.config.projectDir;
-    const {model} = readGeminiPromptsAndModel(dir, undefined, session.sessionUuid);
-    return {model: model || "Gemini"};
+    // No model before the first reply: the renderer keeps a model chosen from the menu meanwhile
+    return {model: readGeminiPromptsAndModel(dir, undefined, session.sessionUuid).model};
   }
   const file = sessionTranscriptFile(session);
   if (!file) return {};

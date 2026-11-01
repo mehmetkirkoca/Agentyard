@@ -33,12 +33,17 @@ export function parseHookEvents(text: string): HookEvent[] {
 export function nextStatus(current: SessionStatus | undefined, ev: HookEvent, isViewed: boolean): SessionStatus {
   const finished = isViewed ? SessionStatus.IDLE : SessionStatus.DONE;
   switch (ev.hook_event_name) {
+    // Claude Code: UserPromptSubmit/PostToolUse, Gemini CLI: BeforeAgent/AfterTool
     case "UserPromptSubmit":
     case "PostToolUse":
+    case "BeforeAgent":
+    case "AfterTool":
       return SessionStatus.RUNNING;
+    // Gemini CLI sends notification_type "ToolPermission" while it waits for approval
     case "Notification":
       return ev.notification_type === "idle_prompt" ? finished : SessionStatus.WAITING;
     case "Stop":
+    case "AfterAgent":
       return finished;
     default:
       return current ?? SessionStatus.IDLE;
