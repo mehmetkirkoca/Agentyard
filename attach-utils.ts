@@ -1,5 +1,6 @@
+import * as os from "os";
 import * as path from "path";
-import {appHome} from "./claude-paths";
+import {standaloneScratchDir} from "./project-model";
 
 // Bracketed paste markers: Claude Code turns pasted image paths into [Image #N] attachments
 export const PASTE_START = "\x1b[200~";
@@ -57,11 +58,15 @@ export function attachmentFileName(date: Date, n: number): string {
 }
 
 /**
- * Per-session attachment folder: <home>/.agentyard/attachments/<sessionUuid>.
+ * Per-session attachment folder: <home>/agentyard-scratch/attachments/<sessionUuid>.
  * The uuid is reduced to safe characters so it cannot escape the folder.
+ *
+ * Stored under ~/agentyard-scratch/ (instead of ~/.agentyard/) because on Linux,
+ * Snap-confined tools (such as Antigravity CLI / agy installed via snap) are
+ * blocked by Snap AppArmor confinement from reading dot-directories like ~/.agentyard.
  */
-export function attachmentsDir(sessionUuid: string, home?: string): string {
+export function attachmentsDir(sessionUuid: string, home: string = os.homedir()): string {
   const safeUuid = sessionUuid.replace(/[^A-Za-z0-9-]/g, "");
   if (!safeUuid) throw new Error(`Invalid session uuid for attachments: ${JSON.stringify(sessionUuid)}`);
-  return path.join(appHome(home), "attachments", safeUuid);
+  return path.join(standaloneScratchDir(home), "attachments", safeUuid);
 }

@@ -126,11 +126,32 @@ function migrateProjects(): void {
   }
 }
 
+// Migrate any attachments from ~/.agentyard/attachments to ~/agentyard-scratch/attachments
+function migrateLegacyAttachments(home: string = os.homedir()): void {
+  const oldDir = path.join(appHome(home), "attachments");
+  const newDir = path.join(standaloneScratchDir(home), "attachments");
+  try {
+    if (fs.existsSync(oldDir) && fs.statSync(oldDir).isDirectory()) {
+      fs.mkdirSync(newDir, {recursive: true});
+      for (const entry of fs.readdirSync(oldDir)) {
+        const src = path.join(oldDir, entry);
+        const dest = path.join(newDir, entry);
+        if (!fs.existsSync(dest)) {
+          fs.cpSync(src, dest, {recursive: true});
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error migrating legacy attachments:", error);
+  }
+}
+
 // Idempotent: persist the built-in project of standalone sessions (SESSIONS section) when missing.
 function bootstrapStandaloneProject(): void {
   try {
     const result = ensureStandaloneProject(getProjects(), os.homedir());
     if (result.changed) saveProjects(result.projects);
+    migrateLegacyAttachments(os.homedir());
   } catch (error) {
     console.error("Error creating the standalone sessions project:", error);
   }
@@ -904,7 +925,7 @@ ipcMain.handle("select-attachment-files", async (): Promise<{ ok: true; paths: s
   }
 });
 
-// Pane "+" menu: save the clipboard image as a PNG under ~/.agentyard/attachments/<sessionUuid>/
+// Pane "+" menu: save the clipboard image as a PNG under ~/agentyard-scratch/attachments/<sessionUuid>/
 ipcMain.handle("save-clipboard-image", (_event, sessionId: string): { ok: true; path: string } | { ok: false; error: string; empty?: boolean } => {
   try {
     const session = getPersistedSessions().find(s => s.id === sessionId);

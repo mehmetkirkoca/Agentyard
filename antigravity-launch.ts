@@ -44,7 +44,11 @@ export function buildAgyCommand(opts: {binary: string; conversationId?: string; 
 }
 
 export function agyTranscriptPath(conversationId: string, home: string = os.homedir()): string {
-  return path.join(home, ".gemini", "antigravity-cli", "brain", conversationId, ".system_generated", "logs", "transcript_full.jsonl");
+  const primary = path.join(home, ".gemini", "antigravity-cli", "brain", conversationId, ".system_generated", "logs", "transcript_full.jsonl");
+  if (fs.existsSync(primary)) return primary;
+  const snap = path.join(home, "snap", "antigravity-cli", "common", ".gemini", "antigravity-cli", "brain", conversationId, ".system_generated", "logs", "transcript_full.jsonl");
+  if (fs.existsSync(snap)) return snap;
+  return primary;
 }
 
 // agy wraps what the user typed as <USER_REQUEST>…</USER_REQUEST>, followed by its own metadata
@@ -145,7 +149,9 @@ export function parseAgyAnnotationTitle(text: string): string | undefined {
 /** The title agy gave a conversation (~/.gemini/antigravity-cli/annotations/<id>.pbtxt), if any yet. */
 export function readAgyTitle(conversationId: string | undefined, home: string = os.homedir()): string | undefined {
   if (!isAgyConversationId(conversationId)) return undefined;
-  const file = path.join(home, ".gemini", "antigravity-cli", "annotations", `${conversationId}.pbtxt`);
+  const primary = path.join(home, ".gemini", "antigravity-cli", "annotations", `${conversationId}.pbtxt`);
+  const snap = path.join(home, "snap", "antigravity-cli", "common", ".gemini", "antigravity-cli", "annotations", `${conversationId}.pbtxt`);
+  const file = fs.existsSync(primary) ? primary : fs.existsSync(snap) ? snap : primary;
   try {
     return parseAgyAnnotationTitle(fs.readFileSync(file, "utf8"));
   } catch (error) {

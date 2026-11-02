@@ -82,12 +82,12 @@ describe("attachmentFileName", () => {
 });
 
 describe("attachmentsDir", () => {
-  it("points to <home>/.agentyard/attachments/<uuid>", () => {
-    expect(attachmentsDir("0a1b-2c3d", "/h")).toBe("/h/.agentyard/attachments/0a1b-2c3d");
+  it("points to <home>/agentyard-scratch/attachments/<uuid>", () => {
+    expect(attachmentsDir("0a1b-2c3d", "/h")).toBe("/h/agentyard-scratch/attachments/0a1b-2c3d");
   });
 
   it("drops characters that could escape the folder", () => {
-    expect(attachmentsDir("../../etc", "/h")).toBe("/h/.agentyard/attachments/etc");
+    expect(attachmentsDir("../../etc", "/h")).toBe("/h/agentyard-scratch/attachments/etc");
   });
 
   it("rejects an empty uuid", () => {

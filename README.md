@@ -55,9 +55,9 @@ npm run build && npx electron . --no-sandbox
   - `sessions/`: central transcript store (symlinked from `~/.claude/projects/<dir>/`)
   - `status/`: per-session hook status
   - `hooks/`: per-session hook settings
-  - `attachments/`: pasted clipboard images
 - `~/.config/agentyard/` (Electron userData; `~/.config/Agentyard/` for a packaged build): settings, projects and sessions (`config.json`) and UI state.
 - `~/agentyard-scratch/`: working folder of the Others (standalone) sessions, created on first use.
+  - `attachments/`: pasted clipboard images (kept in a non-hidden directory so Snap-confined agents like Antigravity CLI can read them).
 
 Process detection for the "open elsewhere" state is Linux-only and reads `/proc`.
 

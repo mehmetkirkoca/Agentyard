@@ -437,7 +437,10 @@ function agySkillsUnder(dir: string, prefix: string, source: SlashCommand["sourc
 
 function enabledAgyPlugins(home: string): string[] {
   try {
-    const config = JSON.parse(readText(path.join(home, ".gemini/config/config.json")) ?? "{}");
+    const primary = path.join(home, ".gemini/config/config.json");
+    const snap = path.join(home, "snap/antigravity-cli/common/.gemini/config/config.json");
+    const file = fs.existsSync(primary) ? primary : fs.existsSync(snap) ? snap : primary;
+    const config = JSON.parse(readText(file) ?? "{}");
     return Object.entries<any>(config?.plugins ?? {}).filter(([, p]) => p?.enabled === true).map(([name]) => name);
   } catch (error) {
     console.error("Reading the Antigravity plugin list failed:", error);
@@ -458,10 +461,20 @@ export function listAntigravitySlashCommands(opts: {home: string; projectDir?: s
     if (byName.get(c.name)?.source !== "built-in") byName.set(c.name, c);
   });
   add(ANTIGRAVITY_BUILT_IN_COMMANDS.map(([name, description]) => ({name, description, source: "built-in" as const})));
-  add(agySkillsUnder(path.join(opts.home, ".gemini/antigravity-cli/builtin/skills"), "", "built-in"));
-  add(agySkillsUnder(path.join(opts.home, ".gemini/config/skills"), "", "user"));
+
+  const builtinSkills = [
+    path.join(opts.home, ".gemini/antigravity-cli/builtin/skills"),
+    path.join(opts.home, "snap/antigravity-cli/common/.gemini/antigravity-cli/builtin/skills"),
+  ].find(p => fs.existsSync(p)) ?? path.join(opts.home, ".gemini/antigravity-cli/builtin/skills");
+  add(agySkillsUnder(builtinSkills, "", "built-in"));
+
+  const configDir = [
+    path.join(opts.home, ".gemini/config"),
+    path.join(opts.home, "snap/antigravity-cli/common/.gemini/config"),
+  ].find(p => fs.existsSync(p)) ?? path.join(opts.home, ".gemini/config");
+  add(agySkillsUnder(path.join(configDir, "skills"), "", "user"));
   for (const plugin of enabledAgyPlugins(opts.home)) {
-    add(agySkillsUnder(path.join(opts.home, ".gemini/config/plugins", plugin, "skills"), `${plugin}:`, "plugin"));
+    add(agySkillsUnder(path.join(configDir, "plugins", plugin, "skills"), `${plugin}:`, "plugin"));
   }
   if (opts.projectDir) add(agySkillsUnder(path.join(opts.projectDir, ".agents/skills"), "", "project"));
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
