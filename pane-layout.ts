@@ -210,6 +210,16 @@ export function removeSession(state: PaneState, sessionId: string, openTabs: str
   return {...state, root, tabOrder: state.tabOrder.filter(id => id !== sessionId)};
 }
 
+// Session taken out on purpose (moved to another workspace): its pane empties and loses its pin,
+// nothing refills it and the focus stays
+export function evictSession(state: PaneState, sessionId: string): PaneState {
+  return {
+    ...state,
+    root: clearSession(state.root, sessionId),
+    tabOrder: state.tabOrder.filter(id => id !== sessionId),
+  };
+}
+
 // Drop ids of sessions that no longer exist (e.g. deleted while the app was closed)
 export function pruneSessions(state: PaneState, known: Set<string>): PaneState {
   return {

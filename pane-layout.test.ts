@@ -8,6 +8,7 @@ import {
   crossHandle,
   dropZone,
   ensureInTabOrder,
+  evictSession,
   focusedSession,
   focusPane,
   is2x2,
@@ -255,6 +256,15 @@ describe("pinned panes", () => {
     expect(leaves(moved.root).find(l => l.session === "a")?.pinned).toBe(true);
     const rows = applyTemplate(base, "rows");
     expect(pins(rows)).toEqual([true, false]);
+  });
+
+  it("evicting a session empties its pane, lifts the pin and drops it from the tab order", () => {
+    const base = state(S("row", P(1, "a"), L(2, "b")), {focused: 1, tabOrder: ["a", "b"]});
+    const s = evictSession(base, "a");
+    expect(sessionsOf(s)).toEqual([null, "b"]);
+    expect(pins(s)).toEqual([false, false]);
+    expect(s.tabOrder).toEqual(["b"]);
+    expect(s.focused).toBe(1);
   });
 
   it("persists the pin", () => {
