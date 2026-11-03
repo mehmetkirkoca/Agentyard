@@ -897,6 +897,30 @@ body {
     color: var(--vsc-fg-muted);
   }
 
+  /* Pin: faint until hovered, solid while the pane is pinned */
+  .pane-action[data-action="pin"] {
+    font-size: 10px;
+    filter: grayscale(1);
+    opacity: 0.5;
+  }
+
+  .pane-action[data-action="pin"]:hover:not(:disabled) {
+    opacity: 1;
+  }
+
+  .pane-action[data-action="pin"]:disabled {
+    opacity: 0.2;
+  }
+
+  .pane-action[data-action="pin"].active {
+    filter: none;
+    opacity: 1;
+  }
+
+  .pane.pinned .pane-header {
+    border-bottom-color: var(--vsc-accent);
+  }
+
   .pane-action[data-action="voice"] {
     font-size: 11px;
   }

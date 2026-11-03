@@ -14,6 +14,7 @@ export interface LeafNode {
   kind: "leaf";
   id: number;
   session: string | null;
+  pinned?: boolean; // a newly opened session never replaces this pane's content
 }
 
 export interface SplitNode {
@@ -129,12 +130,32 @@ export function templateOf(root: PaneNode): LayoutKind | null {
 
 // ---- Session placement ----
 
+// Moving a session out of a pane on purpose also lifts that pane's pin
 function clearSession(root: PaneNode, sessionId: string): PaneNode {
-  return mapLeaves(root, l => (l.session === sessionId ? {...l, session: null} : l));
+  return mapLeaves(root, l => (l.session === sessionId ? {...l, session: null, pinned: undefined} : l));
 }
 
 function setLeafSession(root: PaneNode, leafId: number, sessionId: string | null): PaneNode {
   return mapLeaves(root, l => (l.id === leafId ? {...l, session: sessionId} : l));
+}
+
+export function isPanePinned(state: PaneState, leafId: number): boolean {
+  return leaves(state.root).find(l => l.id === leafId)?.pinned === true;
+}
+
+// Pin/unpin a pane; an empty pane cannot be newly pinned
+export function togglePanePin(state: PaneState, leafId: number): PaneState {
+  const target = leaves(state.root).find(l => l.id === leafId);
+  if (!target || (!target.pinned && target.session === null)) return state;
+  const pinned = target.pinned ? undefined : true;
+  return {...state, root: mapLeaves(state.root, l => (l.id === leafId ? {...l, pinned} : l))};
+}
+
+// A pinned pane only takes a session while it is empty (or already shows that session)
+export function canAssign(state: PaneState, leafId: number, sessionId: string): boolean {
+  const target = leaves(state.root).find(l => l.id === leafId);
+  if (!target) return false;
+  return !target.pinned || target.session === null || target.session === sessionId;
 }
 
 export function focusPane(state: PaneState, leafId: number): PaneState {
@@ -143,36 +164,44 @@ export function focusPane(state: PaneState, leafId: number): PaneState {
 
 // Put a session into a pane (moving it out of any other pane) and focus that pane
 export function assignSession(state: PaneState, leafId: number, sessionId: string): PaneState {
-  if (!hasLeaf(state, leafId)) return state;
+  if (!canAssign(state, leafId, sessionId)) return state;
   const root = setLeafSession(clearSession(state.root, sessionId), leafId, sessionId);
   return {...state, root, focused: leafId};
 }
 
 // Opening a session (tab or sidebar click): focus the pane already showing it; otherwise fill
 // the focused pane if it is empty, else the first empty pane; replace the focused pane only
-// when every pane is occupied.
+// when every pane is occupied. Pinned panes are never chosen: a pinned focused pane hands the
+// replacement to the first unpinned pane. With every pane pinned the state is returned unchanged.
 export function showSession(state: PaneState, sessionId: string): PaneState {
   const existing = paneOfSession(state, sessionId);
   if (existing !== null) return focusPane(state, existing);
-  if (paneSession(state, state.focused) === null) return assignSession(state, state.focused, sessionId);
-  const empty = leaves(state.root).find(leaf => leaf.session === null);
-  return assignSession(state, empty ? empty.id : state.focused, sessionId);
+  const free = leaves(state.root).filter(leaf => !leaf.pinned);
+  const focused = free.find(leaf => leaf.id === state.focused);
+  if (focused && focused.session === null) return assignSession(state, focused.id, sessionId);
+  const target = free.find(leaf => leaf.session === null) ?? focused ?? free[0];
+  return target ? assignSession(state, target.id, sessionId) : state;
 }
 
 // Swap the contents of two panes (an empty target just receives the session); focus follows it
 export function swapPanes(state: PaneState, from: number, to: number): PaneState {
   if (from === to || !hasLeaf(state, from) || !hasLeaf(state, to)) return state;
-  const a = paneSession(state, from);
-  const b = paneSession(state, to);
-  const root = setLeafSession(setLeafSession(state.root, from, b), to, a);
+  // The pin travels with the content
+  const a = leaves(state.root).find(l => l.id === from)!;
+  const b = leaves(state.root).find(l => l.id === to)!;
+  const root = mapLeaves(state.root, l => {
+    if (l.id === from) return {...l, session: b.session, pinned: b.pinned};
+    if (l.id === to) return {...l, session: a.session, pinned: a.pinned};
+    return l;
+  });
   return {...state, root, focused: to};
 }
 
-// Closed or deleted session: its pane stays (empty); a focused pane that lost it gets the
-// first open tab not visible elsewhere
+// Closed or deleted session: its pane stays (empty, keeping its pin); an unpinned focused pane
+// that lost it gets the first open tab not visible elsewhere
 export function removeSession(state: PaneState, sessionId: string, openTabs: string[]): PaneState {
-  const wasFocused = focusedSession(state) === sessionId;
-  let root = clearSession(state.root, sessionId);
+  const wasFocused = focusedSession(state) === sessionId && !isPanePinned(state, state.focused);
+  let root = mapLeaves(state.root, l => (l.session === sessionId ? {...l, session: null} : l));
   if (wasFocused) {
     const shown = new Set(leaves(root).flatMap(l => (l.session ? [l.session] : [])));
     const next = openTabs.find(id => id !== sessionId && !shown.has(id));
@@ -235,9 +264,13 @@ function removePane(state: PaneState, leafId: number): PaneState {
 export function movePane(state: PaneState, from: number, to: number, side: Side): PaneState {
   if (from === to || !hasLeaf(state, from) || !hasLeaf(state, to)) return state;
   const session = paneSession(state, from);
+  const pinned = isPanePinned(state, from);
   // Normalised once at the end (by splitPane), not for the intermediate tree
   const closed = removePane(state, from);
-  return splitPane(closed, to, side, session) ?? state;
+  const moved = splitPane(closed, to, side, session);
+  if (!moved) return state;
+  // The new pane takes over the pin (an empty pinned pane included)
+  return pinned ? {...moved, root: mapLeaves(moved.root, l => (l.id === moved.focused ? {...l, pinned: true} : l))} : moved;
 }
 
 // ---- Ratios ----
@@ -281,7 +314,9 @@ export function applyTemplate(state: PaneState, layout: LayoutKind): PaneState {
   const focusedId = focusedSession(state);
   // A single pane keeps what the focused pane shows
   const keep = layout === "single" ? [focusedId] : visibleSessions(state);
-  const root = buildTemplate(layout, keep);
+  const pinnedSessions = new Set(leaves(state.root).flatMap(l => (l.pinned && l.session ? [l.session] : [])));
+  const root = mapLeaves(buildTemplate(layout, keep),
+    l => (l.session && pinnedSessions.has(l.session) ? {...l, pinned: true} : l));
   const focusLeaf = leaves(root).find(l => l.session !== null && l.session === focusedId);
   return {...state, root, focused: focusLeaf ? focusLeaf.id : 1};
 }
@@ -406,7 +441,7 @@ function parseNode(raw: unknown, depth: number, ctx: {next: number; seen: Set<st
     let session = typeof obj.session === "string" && obj.session ? obj.session : null;
     if (session && ctx.seen.has(session)) session = null;
     if (session) ctx.seen.add(session);
-    return leaf(id, session);
+    return obj.pinned === true ? {...leaf(id, session), pinned: true} : leaf(id, session);
   }
   if (obj.kind === "split" && (obj.dir === "row" || obj.dir === "col")) {
     const a = parseNode(obj.a, depth + 1, ctx);

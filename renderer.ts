@@ -12,6 +12,7 @@ import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, 
 import {
   applyTemplate,
   assignSession,
+  canAssign,
   canSplit,
   closePane,
   createPaneState,
@@ -23,6 +24,7 @@ import {
   is2x2,
   LAYOUTS,
   LayoutKind,
+  LeafNode,
   leaves,
   MAX_PANES,
   movePane,
@@ -43,6 +45,7 @@ import {
   swapPanes,
   tabInsertBefore,
   templateOf,
+  togglePanePin,
   visibleSessions,
 } from "./pane-layout";
 import * as path from "path";
@@ -1705,7 +1708,12 @@ async function openDirPicker(sessionId: string): Promise<void> {
 async function showDirPickerFor(sessionId: string): Promise<void> {
   if (!sessions.has(sessionId)) return;
   if (paneOfSession(paneState, sessionId) === null) {
-    commitPanes(showSession(paneState, sessionId));
+    const next = showSession(paneState, sessionId);
+    if (paneOfSession(next, sessionId) === null) {
+      warnAllPinned();
+      return;
+    }
+    commitPanes(next);
     syncActiveSession(false);
   }
   await refreshPaneBreadcrumbs();
@@ -2018,6 +2026,7 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
   header.innerHTML = `
     <span class="pane-breadcrumb"></span>
     <span class="pane-header-actions">
+      <button class="pane-action" data-action="pin" title="Pin pane">📌</button>
       <button class="pane-action" data-action="right" title="Split right">◫</button>
       <button class="pane-action" data-action="down" title="Split down">⬒</button>
       <button class="pane-action" data-action="close" title="Close pane">×</button>
@@ -2028,6 +2037,7 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
       e.stopPropagation();
       const action = btn.dataset.action;
       if (action === "close") closePaneAt(leafId);
+      else if (action === "pin") togglePinAt(leafId);
       else splitPaneWith(leafId, action === "right" ? "right" : "bottom", null);
     });
   });
@@ -2845,6 +2855,7 @@ function renderPanes() {
     header.draggable = treeLeaves.length > 1;
     header.title = treeLeaves.length > 1 ? "Drag onto another pane: center swaps, edges move it there" : "";
     renderPaneBreadcrumb(pane, leafNode.id, session);
+    renderPanePin(pane, leafNode);
     renderPanePrompt(pane, session?.id);
     renderPaneToolbar(pane, leafNode.id, !!element);
     const placeholder = pane.querySelector(".pane-placeholder") as HTMLElement;
@@ -2994,6 +3005,25 @@ function splitPaneWith(leafId: number, side: Side, sessionId: string | null) {
   syncActiveSession(true);
 }
 
+// Pinned pane: a newly opened session never lands on it
+function renderPanePin(pane: HTMLElement, leafNode: LeafNode) {
+  const pinned = leafNode.pinned === true;
+  pane.classList.toggle("pinned", pinned);
+  const button = pane.querySelector<HTMLButtonElement>('.pane-action[data-action="pin"]');
+  if (!button) return;
+  button.classList.toggle("active", pinned);
+  button.disabled = !pinned && leafNode.session === null;
+  button.title = pinned ? "Unpin pane" : "Pin pane: newly opened sessions will not replace it";
+}
+
+function togglePinAt(leafId: number) {
+  commitPanes(togglePanePin(paneState, leafId));
+}
+
+function warnAllPinned() {
+  showToast("Every pane is pinned. Unpin one, or drag the tab onto a pane edge to split.", "warning");
+}
+
 // Header ×: the pane goes away, its session (if any) just becomes hidden
 function closePaneAt(leafId: number) {
   if (paneTotal() < 2) return;
@@ -3012,6 +3042,10 @@ function reopenPaneSession(leafId: number) {
 function dropSessionOnPane(leafId: number, sessionId: string) {
   const session = sessions.get(sessionId);
   if (!session || !session.element || !session.terminal) return;
+  if (!canAssign(paneState, leafId, sessionId)) {
+    showToast("This pane is pinned. Unpin it first, or drop onto its edge to split.", "warning");
+    return;
+  }
   commitPanes(assignSession(paneState, leafId, sessionId));
   syncActiveSession(true);
 }
@@ -3103,7 +3137,12 @@ function reorderTab(sessionId: string, target: {tab: HTMLElement; after: boolean
 function switchToSession(sessionId: string) {
   const session = sessions.get(sessionId);
   if (!session || !session.element || !session.terminal || !session.fitAddon) return;
-  commitPanes(showSession(paneState, sessionId));
+  const next = showSession(paneState, sessionId);
+  if (paneOfSession(next, sessionId) === null) {
+    warnAllPinned();
+    return;
+  }
+  commitPanes(next);
   syncActiveSession(true);
   stickyPrompts.get(sessionId)?.refreshPrompts();
 }

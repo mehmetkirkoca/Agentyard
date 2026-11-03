@@ -1,6 +1,7 @@
 import {
   applyTemplate,
   assignSession,
+  canAssign,
   clampSplit,
   closePane,
   createPaneState,
@@ -28,6 +29,7 @@ import {
   swapPanes,
   tabInsertBefore,
   templateOf,
+  togglePanePin,
   visibleSessions,
 } from "./pane-layout";
 
@@ -191,6 +193,73 @@ describe("session placement", () => {
     expect(visibleSessions(s)).toEqual(["a"]);
     expect(s.tabOrder).toEqual(["a"]);
     expect(focusedSession(s)).toBe("a");
+  });
+});
+
+describe("pinned panes", () => {
+  const P = (id: number, session: string | null = null): PaneNode => ({kind: "leaf", id, session, pinned: true});
+  const pins = (s: PaneState) => leaves(s.root).map(l => l.pinned === true);
+
+  it("toggles a pin; an empty pane cannot be newly pinned", () => {
+    const base = state(S("row", L(1, "a"), L(2)));
+    const pinned = togglePanePin(base, 1);
+    expect(pins(pinned)).toEqual([true, false]);
+    expect(pins(togglePanePin(pinned, 1))).toEqual([false, false]);
+    expect(togglePanePin(base, 2)).toBe(base);
+    expect(togglePanePin(base, 9)).toBe(base);
+  });
+
+  it("a new session replaces the first unpinned pane when the focused one is pinned", () => {
+    const base = state(grid("a", "b", "c", "d"), {focused: 1});
+    const root = S("col", S("row", P(1, "a"), P(2, "b")), S("row", L(3, "c"), L(4, "d")));
+    const s = showSession({...base, root}, "x");
+    expect(sessionsOf(s)).toEqual(["a", "b", "x", "d"]);
+    expect(s.focused).toBe(3);
+  });
+
+  it("an empty pinned pane is skipped; an unpinned focused pane is still replaced", () => {
+    const s = showSession(state(S("row", P(1), L(2, "b")), {focused: 2}), "x");
+    expect(sessionsOf(s)).toEqual([null, "x"]);
+  });
+
+  it("does nothing when every pane is pinned, but still focuses an already shown session", () => {
+    const base = state(S("row", P(1, "a"), P(2, "b")), {focused: 1});
+    expect(showSession(base, "x")).toBe(base);
+    expect(showSession(base, "b").focused).toBe(2);
+  });
+
+  it("a pinned pane refuses a different session but accepts one while empty", () => {
+    const base = state(S("row", P(1, "a"), P(2)));
+    expect(canAssign(base, 1, "x")).toBe(false);
+    expect(assignSession(base, 1, "x")).toBe(base);
+    expect(sessionsOf(assignSession(base, 2, "x"))).toEqual(["a", "x"]);
+  });
+
+  it("a closed session keeps the pin and does not refill the pinned focused pane", () => {
+    const base = state(S("row", P(1, "a"), L(2, "b")), {focused: 1, tabOrder: ["a", "b", "c"]});
+    const s = removeSession(base, "a", ["b", "c"]);
+    expect(sessionsOf(s)).toEqual([null, "b"]);
+    expect(pins(s)).toEqual([true, false]);
+  });
+
+  it("moving the session elsewhere on purpose lifts the pin", () => {
+    const s = assignSession(state(S("row", P(1, "a"), L(2))), 2, "a");
+    expect(sessionsOf(s)).toEqual([null, "a"]);
+    expect(pins(s)).toEqual([false, false]);
+  });
+
+  it("the pin follows the content on swap, move and template changes", () => {
+    const base = state(S("row", P(1, "a"), L(2, "b")));
+    expect(pins(swapPanes(base, 1, 2))).toEqual([false, true]);
+    const moved = movePane(base, 1, 2, "bottom");
+    expect(leaves(moved.root).find(l => l.session === "a")?.pinned).toBe(true);
+    const rows = applyTemplate(base, "rows");
+    expect(pins(rows)).toEqual([true, false]);
+  });
+
+  it("persists the pin", () => {
+    const s = parsePaneState(JSON.parse(JSON.stringify(state(S("row", P(1, "a"), L(2, "b"))))));
+    expect(pins(s)).toEqual([true, false]);
   });
 });
 
