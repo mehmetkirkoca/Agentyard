@@ -6,6 +6,7 @@ import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus,
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey} from "./terminal-utils";
+import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName} from "./editor-launch";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
 import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
@@ -100,6 +101,8 @@ interface TerminalSettings {
   theme: string; // Theme preset name
   cursorBlink: boolean;
   worktreeDir: string;
+  editor: string; // EDITOR_PRESETS id or "custom"
+  editorCommand: string; // custom editor: program and arguments, {dir} = the session's directory
 }
 
 interface ThemeColors {
@@ -296,6 +299,8 @@ const DEFAULT_SETTINGS: TerminalSettings = {
   theme: "vscode-dark",
   cursorBlink: false,
   worktreeDir: require("path").join(require("os").homedir(), "worktrees"),
+  editor: DEFAULT_EDITOR_ID,
+  editorCommand: "",
 };
 
 const sessions = new Map<string, Session>();
@@ -1798,7 +1803,8 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
   const shellState = sideShells.get(session.id)?.visible ? "open"
     : sideShells.has(session.id) ? "hidden"
     : canOpenSideShell(session) ? "closed" : "off";
-  const sig = JSON.stringify([session.id, projectName, session.name, dirName, dirMode, branch, shellState]);
+  const editor = editorName(terminalSettings.editor, terminalSettings.editorCommand);
+  const sig = JSON.stringify([session.id, projectName, session.name, dirName, dirMode, branch, shellState, editor]);
   if (crumb.dataset.sig === sig) return;
   crumb.dataset.sig = sig;
 
@@ -1856,6 +1862,18 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
     void toggleSideShell(session.id);
   });
   nodes.push(shellBtn);
+  const editorBtn = document.createElement("button");
+  editorBtn.className = "breadcrumb-shell breadcrumb-editor";
+  editorBtn.draggable = false;
+  editorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>`;
+  editorBtn.disabled = !(session.worktreePath || dir);
+  editorBtn.title = editorBtn.disabled ? "No directory to open" : `Open ${session.worktreePath || dir} in ${editor}`;
+  editorBtn.setAttribute("aria-label", `Open in ${editor}`);
+  editorBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void openInEditor(session.id);
+  });
+  nodes.push(editorBtn);
   if (branch) {
     const branchEl = document.createElement("span");
     branchEl.className = "breadcrumb-branch";
@@ -1864,6 +1882,15 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
     nodes.push(branchEl);
   }
   crumb.replaceChildren(...nodes);
+}
+
+async function openInEditor(sessionId: string) {
+  try {
+    const result = await ipcRenderer.invoke("open-in-editor", sessionId) as {ok: boolean; error?: string};
+    if (!result.ok) showToast(result.error ?? "Could not open the editor", "error");
+  } catch (error) {
+    showToast(`open-in-editor failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
 }
 
 // Whether the session's project offers a directory other than the one it runs in;
@@ -2526,7 +2553,7 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
   // a slightly moved click on a header button, the 📁 picker or the branch must not start a pane drag
   let pressedOnAction = false;
   header.addEventListener("mousedown", (e) => {
-    pressedOnAction = !!(e.target as HTMLElement).closest(".pane-action, .breadcrumb-dir, .breadcrumb-branch, .breadcrumb-shell");
+    pressedOnAction = !!(e.target as HTMLElement).closest(".pane-action, .breadcrumb-dir, .breadcrumb-branch, .breadcrumb-shell, .breadcrumb-editor");
   });
   header.addEventListener("dragstart", (e) => {
     if (!e.dataTransfer || paneTotal() < 2 || pressedOnAction) {
@@ -4780,6 +4807,20 @@ const settingsFontFamily = document.getElementById("settings-font-family") as HT
 const settingsFontSize = document.getElementById("settings-font-size") as HTMLInputElement;
 const settingsCursorBlink = document.getElementById("settings-cursor-blink") as HTMLInputElement;
 const settingsWorktreeDir = document.getElementById("settings-worktree-dir") as HTMLInputElement;
+const settingsEditor = document.getElementById("settings-editor") as HTMLSelectElement;
+const settingsEditorCommand = document.getElementById("settings-editor-command") as HTMLInputElement;
+const settingsEditorCommandGroup = document.getElementById("settings-editor-command-group");
+
+// Editor choices: the presets, then "Custom…" (its command field shows only then)
+if (settingsEditor) {
+  for (const preset of EDITOR_PRESETS) settingsEditor.add(new Option(preset.name, preset.id));
+  settingsEditor.add(new Option("Custom…", CUSTOM_EDITOR_ID));
+  settingsEditor.addEventListener("change", syncEditorCommandField);
+}
+
+function syncEditorCommandField() {
+  settingsEditorCommandGroup?.classList.toggle("hidden", settingsEditor?.value !== CUSTOM_EDITOR_ID);
+}
 const browseWorktreeDirBtn = document.getElementById("browse-worktree-dir");
 
 // Load saved settings on startup
@@ -4808,6 +4849,10 @@ function populateSettingsForm() {
   settingsFontSize.value = terminalSettings.fontSize.toString();
   settingsCursorBlink.checked = terminalSettings.cursorBlink;
   settingsWorktreeDir.value = terminalSettings.worktreeDir;
+  const known = terminalSettings.editor === CUSTOM_EDITOR_ID || EDITOR_PRESETS.some(p => p.id === terminalSettings.editor);
+  settingsEditor.value = known ? terminalSettings.editor : DEFAULT_EDITOR_ID;
+  settingsEditorCommand.value = terminalSettings.editorCommand;
+  syncEditorCommandField();
 }
 
 // Apply settings to all existing terminals
@@ -4872,19 +4917,22 @@ saveSettingsBtn?.addEventListener("click", async () => {
   terminalSettings.fontSize = parseInt(settingsFontSize.value) || DEFAULT_SETTINGS.fontSize;
   terminalSettings.cursorBlink = settingsCursorBlink.checked;
   terminalSettings.worktreeDir = settingsWorktreeDir.value || DEFAULT_SETTINGS.worktreeDir;
+  terminalSettings.editor = settingsEditor.value || DEFAULT_EDITOR_ID;
+  terminalSettings.editorCommand = settingsEditorCommand.value.trim();
 
   // Save to electron-store
   await ipcRenderer.invoke("save-terminal-settings", terminalSettings);
 
   // Apply to all existing terminals
   applySettingsToAllTerminals();
+  renderPaneBreadcrumbs();
 
   // Close modal
   settingsModal?.classList.add("hidden");
 });
 
-// Load settings on startup
-loadSettings();
+// Load settings on startup (pane headers name the chosen editor)
+loadSettings().then(renderPaneBreadcrumbs).catch(error => console.error("Error loading settings:", error));
 
 // Apply to Project Modal
 const applyToProjectModal = document.getElementById("apply-to-project-modal");

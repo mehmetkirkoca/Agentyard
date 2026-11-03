@@ -527,6 +527,12 @@ body {
     background-color: var(--vsc-active);
   }
 
+  .breadcrumb-editor {
+    @apply flex items-center;
+    margin-left: 0;
+    height: 18px;
+  }
+
   .breadcrumb-shell:disabled {
     @apply cursor-default;
     opacity: 0.35;

@@ -1,4 +1,4 @@
-import {exec, execFile, spawnSync} from "child_process";
+import {exec, execFile, spawn, spawnSync} from "child_process";
 import {app, BrowserWindow, clipboard, dialog, ipcMain} from "electron";
 import Store from "electron-store";
 import * as fs from "fs";
@@ -15,6 +15,7 @@ import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agy
 import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity-screen";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
+import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
 import {getBranches, getCurrentBranch} from "./git-utils";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
@@ -1228,6 +1229,38 @@ ipcMain.handle("side-shell-start", (_event, sessionId: string, cols: number, row
   } catch (error) {
     return {ok: false, error: `Starting a shell in ${cwd} failed: ${error instanceof Error ? error.message : String(error)}`};
   }
+});
+
+// Pane breadcrumb: open the session's directory (its worktree when it has one) in the editor chosen
+// in Settings (a preset, or a custom command run without a shell)
+ipcMain.handle("open-in-editor", async (_event, sessionId: string): Promise<{ok: true} | {ok: false; error: string}> => {
+  const session = getPersistedSessions().find(s => s.id === sessionId);
+  if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
+  const dir = session.worktreePath || session.config.projectDir;
+  if (!dir || !fs.existsSync(dir)) return {ok: false, error: `Directory not found: ${dir || "(none)"}`};
+  const settings = (store as any).get("terminalSettings") ?? {};
+  const launch = buildEditorLaunch({
+    editorId: typeof settings.editor === "string" ? settings.editor : DEFAULT_EDITOR_ID,
+    customCommand: typeof settings.editorCommand === "string" ? settings.editorCommand : "",
+    dir,
+    pathEnv: process.env.PATH,
+    platform: os.platform(),
+    home: os.homedir(),
+    exists: p => fs.existsSync(p),
+  });
+  if (!launch.ok) return launch;
+  return new Promise(resolve => {
+    try {
+      const child = spawn(launch.file, launch.args, {detached: true, stdio: "ignore", env: editorEnv(process.env)});
+      child.once("error", (error) => resolve({ok: false, error: `Opening ${launch.file} failed: ${error.message}`}));
+      child.once("spawn", () => {
+        child.unref();
+        resolve({ok: true});
+      });
+    } catch (error) {
+      resolve({ok: false, error: `Opening ${launch.file} failed: ${error instanceof Error ? error.message : String(error)}`});
+    }
+  });
 });
 
 ipcMain.on("side-shell-input", (_event, sessionId: string, data: string) => {
