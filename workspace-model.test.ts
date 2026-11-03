@@ -230,6 +230,22 @@ describe("parseWorkspaceState", () => {
     expect(visibleSessions(s.workspaces[2].panes)).toEqual(["a"]);
   });
 
+  it("keeps an unrecorded session found in several workspaces' panes in the first one only", () => {
+    const leafX = {kind: "leaf", id: 1, session: "x"};
+    const raw = {
+      workspaces: [
+        {id: "default", name: "Default", panes: {root: leafX, focused: 1, tabOrder: ["x"]}},
+        {id: "w2", name: "Backend", panes: {root: leafX, focused: 1, tabOrder: ["x"]}},
+      ],
+      activeId: "w2",
+      membership: {},
+    };
+    const s = parseWorkspaceState(raw, null);
+    expect(visibleSessions(s.workspaces[0].panes)).toEqual(["x"]);
+    expect(visibleSessions(s.workspaces[1].panes)).toEqual([]);
+    expect(s.workspaces[1].panes.tabOrder).toEqual([]);
+  });
+
   it("moves a stored Default to the front", () => {
     const raw = {workspaces: [{id: "w2", name: "B"}, {id: "default", name: "Main"}], activeId: "w2", membership: {}};
     const s = parseWorkspaceState(raw, null);

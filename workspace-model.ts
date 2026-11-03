@@ -13,6 +13,7 @@ import {
   parsePaneState,
   pruneSessions,
   removeSession,
+  visibleSessions,
 } from "./pane-layout";
 
 export const DEFAULT_WORKSPACE_ID = "default";
@@ -180,12 +181,19 @@ export function parseWorkspaceState(raw: unknown, legacyPanes: unknown): Workspa
     membership[sessionId] = ids.has(wsId) ? wsId : DEFAULT_WORKSPACE_ID;
   }
 
-  // A recorded session lives in its own workspace's panes only
+  // A recorded session lives in its own workspace's panes only; an unrecorded one stays in the
+  // first workspace that shows it or lists it as a tab (one terminal cannot be in two places)
+  const owner = new Map<string, string>(Object.entries(membership));
+  for (const w of workspaces) {
+    for (const sessionId of [...visibleSessions(w.panes), ...w.panes.tabOrder]) {
+      if (!owner.has(sessionId)) owner.set(sessionId, w.id);
+    }
+  }
   const repaired = workspaces.map(w => {
     let panes = w.panes;
-    for (const [sessionId, wsId] of Object.entries(membership)) {
+    owner.forEach((wsId, sessionId) => {
       if (wsId !== w.id) panes = evictSession(panes, sessionId);
-    }
+    });
     return {...w, panes};
   });
 

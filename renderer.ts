@@ -2085,9 +2085,24 @@ function switchToWorkspace(id: string) {
 function moveSessionToWorkspace(sessionId: string, workspaceId: string) {
   if (!sessions.has(sessionId) || workspaceOf(workspaceState, sessionId) === workspaceId) return;
   commitWorkspaces(moveSessionTo(currentWorkspaces(), sessionId, workspaceId));
+  syncTabDomOrder();
   syncActiveSession(false);
   const name = workspaceState.workspaces.find(w => w.id === workspaceId)?.name ?? "";
   showToast(`Moved to ${name}`, "info");
+}
+
+// A moved tab joins the end of its new workspace's row: put the tab elements in each workspace's
+// saved order (tabs of all workspaces share #tabs, the hidden ones included)
+function syncTabDomOrder() {
+  const container = document.getElementById("tabs");
+  if (!container) return;
+  for (const workspace of workspaceState.workspaces) {
+    for (const id of workspace.panes.tabOrder) {
+      const tab = document.getElementById(`tab-${id}`);
+      const home = workspaceOf(workspaceState, id) ?? workspaceState.activeId;
+      if (tab && home === workspace.id) container.appendChild(tab);
+    }
+  }
 }
 
 function createWorkspace() {
@@ -2102,6 +2117,7 @@ function removeWorkspace(id: string) {
   if (!workspace || id === DEFAULT_WORKSPACE_ID) return;
   if (!confirm(`Delete workspace "${workspace.name}"? Its tabs move to Default.`)) return;
   commitWorkspaces(deleteWorkspace(currentWorkspaces(), id));
+  syncTabDomOrder();
   syncActiveSession(true);
   reopenVisibleSessions();
 }
@@ -2128,9 +2144,12 @@ function startEditingWorkspaceName(id: string) {
       workspaceState = next;
       savePaneState();
     }
-    // renderWorkspaceBar skips while a rename input is in the bar, so take this one out first
-    input.remove();
-    renderWorkspaceBar();
+    // Swap the name back in place instead of rebuilding the bar: a blur from pressing another chip
+    // would otherwise detach that chip before its click lands
+    const name = workspaceState.workspaces.find(w => w.id === id)?.name ?? workspace.name;
+    nameEl.textContent = name;
+    chip.title = id === workspaceState.activeId ? name : `${name}: drop a tab here to move it`;
+    input.replaceWith(nameEl);
   };
   input.addEventListener("keydown", (e) => {
     e.stopPropagation();
@@ -3654,7 +3673,7 @@ function deleteSession(sessionId: string) {
   // Delete in main process (handles worktree removal)
   ipcRenderer.send("delete-session", sessionId);
 
-  dropSessionFromPanes(sessionId);
+  dropSessionFromPanes(sessionId, true);
 }
 
 function showApplyToProjectDialog(sessionId: string) {
