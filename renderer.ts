@@ -3064,6 +3064,14 @@ function reorderTab(sessionId: string, target: {tab: HTMLElement; after: boolean
       const sessionId = e.dataTransfer!.getData(SESSION_DRAG_MIME);
       if (sessionId && target) reorderTab(sessionId, target);
     });
+    // Mouse wheel scrolls the tab row horizontally so tabs pushed off the right edge stay reachable
+    tabsContainer.addEventListener("wheel", (e) => {
+      if (tabsContainer.scrollWidth <= tabsContainer.clientWidth) return;
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (delta === 0) return;
+      e.preventDefault();
+      tabsContainer.scrollLeft += delta;
+    }, {passive: false});
   }
 
   document.getElementById("split-link-toggle")?.addEventListener("click", toggleLinkedSplits);
