@@ -14,6 +14,7 @@ import {
   buildAgyHookCommand,
   buildAgyStatusPlugin,
   createAgyWaitingDetector,
+  ensureAgySnapBridge,
   ensureAgyStatusPlugin,
   filterAgyEvents,
   parseAgyTranscript,
@@ -27,8 +28,29 @@ describe("resolveAgyBinary", () => {
     expect(resolveAgyBinary("/h", p => p === "/h/.gemini/bin/agy")).toBe("/h/.gemini/bin/agy");
   });
 
+  it("prefers unconfined snap binary when managed install is missing", () => {
+    expect(resolveAgyBinary("/h", p => p === "/snap/antigravity-cli/current/bin/agy")).toBe("/snap/antigravity-cli/current/bin/agy");
+  });
+
   it("falls back to agy on PATH", () => {
     expect(resolveAgyBinary("/h", () => false)).toBe("agy");
+  });
+});
+
+describe("ensureAgySnapBridge", () => {
+  it("creates symlink when snap config exists and host config is missing", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "agy-bridge-"));
+    const snapDir = path.join(tmp, "snap", "antigravity-cli", "common", ".gemini", "antigravity-cli");
+    fs.mkdirSync(snapDir, {recursive: true});
+    expect(ensureAgySnapBridge(tmp)).toBe(true);
+    expect(fs.lstatSync(path.join(tmp, ".gemini", "antigravity-cli")).isSymbolicLink()).toBe(true);
+    fs.rmSync(tmp, {recursive: true, force: true});
+  });
+
+  it("does nothing when snap config is missing", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "agy-bridge-"));
+    expect(ensureAgySnapBridge(tmp)).toBe(false);
+    fs.rmSync(tmp, {recursive: true, force: true});
   });
 });
 

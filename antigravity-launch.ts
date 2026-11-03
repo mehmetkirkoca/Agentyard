@@ -5,15 +5,41 @@ import {HookEvent} from "./session-status";
 import {resolveSessionTitle} from "./transcript-meta";
 
 /**
- * The agy binary to run. ~/.gemini/bin/agy is the self-updating install (1.4.12+); an agy found
- * on PATH may be an old copy (1.1.10 lacks --settings and other flags), so it is the fallback.
+ * The agy binary to run. ~/.gemini/bin/agy is the self-updating install (1.4.12+).
+ * When running on Linux where agy was installed via Snap, running the unconfined binary
+ * (/snap/antigravity-cli/current/bin/agy) directly bypasses Snap sandbox restrictions,
+ * allowing full access to host microphone tools (arecord, pw-record). An agy found on PATH
+ * is the final fallback.
  */
 export function resolveAgyBinary(
   home: string = os.homedir(),
   isExecutable: (p: string) => boolean = canExecute,
 ): string {
   const managed = path.join(home, ".gemini", "bin", "agy");
-  return isExecutable(managed) ? managed : "agy";
+  if (isExecutable(managed)) return managed;
+  const snapUnconfined = "/snap/antigravity-cli/current/bin/agy";
+  if (isExecutable(snapUnconfined)) return snapUnconfined;
+  return "agy";
+}
+
+/**
+ * When agy runs natively on the host outside of Snap confinement, ensure ~/.gemini/antigravity-cli
+ * links to the Snap configuration directory (~/snap/antigravity-cli/common/.gemini/antigravity-cli)
+ * so that Google AI login tokens, settings, and conversation history are automatically preserved.
+ */
+export function ensureAgySnapBridge(home: string = os.homedir()): boolean {
+  const hostDir = path.join(home, ".gemini", "antigravity-cli");
+  const snapDir = path.join(home, "snap", "antigravity-cli", "common", ".gemini", "antigravity-cli");
+  try {
+    if (!fs.existsSync(snapDir)) return false;
+    if (fs.existsSync(hostDir)) return false;
+    fs.mkdirSync(path.dirname(hostDir), {recursive: true});
+    fs.symlinkSync(snapDir, hostDir);
+    return true;
+  } catch (error) {
+    console.error("Error creating Antigravity Snap config bridge:", error);
+    return false;
+  }
 }
 
 function canExecute(file: string): boolean {

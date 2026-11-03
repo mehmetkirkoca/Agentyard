@@ -11,7 +11,7 @@ import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
 import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
-import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agySessionName, buildAgyCommand, createAgyWaitingDetector, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
+import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agySessionName, buildAgyCommand, createAgyWaitingDetector, ensureAgySnapBridge, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
 import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity-screen";
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
@@ -1383,6 +1383,7 @@ ipcMain.handle("get-agy-models", (): Promise<AgyModelFamily[]> => {
 // The agentyard-status plugin carries agy's hooks; set up once per app start, never re-enabled
 let agyPluginResult: AgyPluginResult | null = null;
 function setUpAgyStatusPlugin(): void {
+  ensureAgySnapBridge();
   const binary = resolveAgyBinary();
   agyPluginResult = ensureAgyStatusPlugin({
     binary,
