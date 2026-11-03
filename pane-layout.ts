@@ -44,6 +44,25 @@ export function clampSplit(value: unknown): number {
   return Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, value));
 }
 
+// Side shell panel under a pane's agent terminal: its share of the terminal area
+// (pane minus the 44px header + prompt line and the 20px toolbar)
+export const DEFAULT_SHELL_RATIO = 0.35;
+const PANE_CHROME_TOP = 44;
+const PANE_CHROME_BOTTOM = 20;
+
+export function clampShellRatio(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SHELL_RATIO;
+  return Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, value));
+}
+
+// Splitter dragged to clientY in a pane at paneTop with paneHeight
+export function shellRatioAt(paneTop: number, paneHeight: number, clientY: number): number {
+  const area = paneHeight - PANE_CHROME_TOP - PANE_CHROME_BOTTOM;
+  if (area <= 0) return DEFAULT_SHELL_RATIO;
+  const areaBottom = paneTop + paneHeight - PANE_CHROME_BOTTOM;
+  return clampShellRatio((areaBottom - clientY) / area);
+}
+
 function leaf(id: number, session: string | null = null): LeafNode {
   return {kind: "leaf", id, session};
 }

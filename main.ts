@@ -44,6 +44,8 @@ const activePtyProcesses = new Map<string, pty.IPty>();
 // writing (and is invisible to the process scan), so they count as running until onExit.
 const closingPtys = new Map<string, pty.IPty>();
 const mcpPollerPtyProcesses = new Map<string, pty.IPty>();
+// Plain shell beside a session's agent (pane's bottom panel), keyed by the session id
+const sideShellPtys = new Map<string, pty.IPty>();
 let claudeCommandRunnerPty: pty.IPty | null = null;
 
 // One-time move of FleetCode's data (settings, ~/.fleetcode, ~/fleetcode-scratch, transcript links) to Agentyard.
@@ -1187,6 +1189,63 @@ ipcMain.on("session-resize", (_event, sessionId: string, cols: number, rows: num
   }
 });
 
+// ---- Side shell: a plain login shell in the session's directory, shown under its agent ----
+
+function stopSideShell(sessionId: string): void {
+  const ptyProcess = sideShellPtys.get(sessionId);
+  if (!ptyProcess) return;
+  sideShellPtys.delete(sessionId);
+  try {
+    ptyProcess.kill();
+  } catch (error) {
+    console.error(`Error killing the side shell of session ${sessionId}:`, error);
+  }
+}
+
+ipcMain.handle("side-shell-start", (_event, sessionId: string, cols: number, rows: number): {ok: true} | {ok: false; error: string} => {
+  if (sideShellPtys.has(sessionId)) return {ok: true};
+  const session = getPersistedSessions().find(s => s.id === sessionId);
+  if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
+  const cwd = session.worktreePath || session.config.projectDir;
+  if (!cwd || !fs.existsSync(cwd)) return {ok: false, error: `Directory not found: ${cwd || "(none)"}`};
+  try {
+    const env = getPtyEnv(sessionId);
+    // An agent started in this shell must not report as the session's own agent
+    delete env.AGENTYARD_SESSION_ID;
+    const shell = os.platform() === "darwin" ? "zsh" : "bash";
+    const ptyProcess = pty.spawn(shell, ["-l"], {name: "xterm-256color", cols: Math.max(2, cols), rows: Math.max(2, rows), cwd, env});
+    sideShellPtys.set(sessionId, ptyProcess);
+    ptyProcess.onData((data) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("side-shell-output", sessionId, data);
+    });
+    ptyProcess.onExit(() => {
+      // A late exit of a shell already replaced must not close the new one
+      if (sideShellPtys.get(sessionId) !== ptyProcess) return;
+      sideShellPtys.delete(sessionId);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("side-shell-exit", sessionId);
+    });
+    return {ok: true};
+  } catch (error) {
+    return {ok: false, error: `Starting a shell in ${cwd} failed: ${error instanceof Error ? error.message : String(error)}`};
+  }
+});
+
+ipcMain.on("side-shell-input", (_event, sessionId: string, data: string) => {
+  sideShellPtys.get(sessionId)?.write(data);
+});
+
+ipcMain.on("side-shell-resize", (_event, sessionId: string, cols: number, rows: number) => {
+  try {
+    sideShellPtys.get(sessionId)?.resize(Math.max(2, cols), Math.max(2, rows));
+  } catch (error) {
+    console.error(`Error resizing the side shell of session ${sessionId}:`, error);
+  }
+});
+
+ipcMain.on("side-shell-stop", (_event, sessionId: string) => {
+  stopSideShell(sessionId);
+});
+
 // Reopen session (spawn new PTY for existing session)
 ipcMain.on("reopen-session", (event, sessionId: string) => {
   // Check if PTY already active
@@ -1278,6 +1337,7 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
 // Close session (kill PTY but keep session)
 ipcMain.on("close-session", (_event, sessionId: string) => {
   stopSessionPty(sessionId);
+  stopSideShell(sessionId);
   settleSessionStatus(sessionId);
   if (viewedSessionId === sessionId) viewedSessionId = null;
 
@@ -1293,6 +1353,7 @@ ipcMain.on("close-session", (_event, sessionId: string) => {
 ipcMain.on("delete-session", async (_event, sessionId: string) => {
   // Kill PTY if active
   stopSessionPty(sessionId);
+  stopSideShell(sessionId);
 
   // Kill MCP poller if active
   const mcpPoller = mcpPollerPtyProcesses.get(sessionId);
@@ -2090,6 +2151,7 @@ const createWindow = () => {
       }
     });
     activePtyProcesses.clear();
+    for (const sessionId of [...sideShellPtys.keys()]) stopSideShell(sessionId);
 
     // Kill all MCP poller processes
     mcpPollerPtyProcesses.forEach((ptyProcess, sessionId) => {

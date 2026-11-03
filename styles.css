@@ -506,6 +506,33 @@ body {
     background-color: transparent;
   }
 
+  .breadcrumb-shell {
+    @apply flex-none rounded;
+    margin-left: 4px;
+    padding: 0 4px;
+    line-height: 18px;
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    color: var(--vsc-fg-muted);
+    cursor: pointer;
+  }
+
+  .breadcrumb-shell:hover {
+    background-color: rgba(90, 93, 94, 0.31);
+    color: var(--vsc-fg-strong);
+  }
+
+  .breadcrumb-shell.active {
+    color: var(--vsc-fg-strong);
+    background-color: var(--vsc-active);
+  }
+
+  .breadcrumb-shell:disabled {
+    @apply cursor-default;
+    opacity: 0.35;
+    background-color: transparent;
+  }
+
   .breadcrumb-branch {
     flex: 0 4 auto;
     margin-left: 8px;
@@ -1066,6 +1093,47 @@ body {
 
   .pane > .session-wrapper {
     bottom: 20px; /* pane toolbar */
+  }
+
+  /* Side shell: a plain terminal under the agent, sharing the pane's terminal area by --shell-ratio */
+  .pane.shell-open > .session-wrapper {
+    bottom: calc(20px + (100% - 64px) * var(--shell-ratio, 0.35));
+  }
+
+  .side-shell {
+    @apply absolute left-0 right-0;
+    bottom: 20px; /* pane toolbar */
+    height: calc((100% - 64px) * var(--shell-ratio, 0.35));
+    background-color: var(--vsc-bg);
+    border-top: 1px solid var(--vsc-border);
+  }
+
+  .side-shell-host {
+    @apply absolute;
+    inset: 4px 0 0 8px;
+  }
+
+  /* Splitter on the panel's top edge, above the pane's border overlay */
+  .side-shell-handle {
+    @apply absolute left-0 right-0;
+    top: -3px;
+    height: 6px;
+    cursor: row-resize;
+    z-index: 11;
+  }
+
+  .side-shell-handle:hover {
+    background-color: var(--vsc-focus);
+    opacity: 0.5;
+  }
+
+  body.shell-resizing {
+    cursor: row-resize;
+    user-select: none;
+  }
+
+  body.shell-resizing .pane {
+    pointer-events: none;
   }
 
   /* Thin bar under Claude's prompt box, set off from the terminal by a faint top border */

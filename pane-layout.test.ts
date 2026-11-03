@@ -2,6 +2,7 @@ import {
   applyTemplate,
   assignSession,
   canAssign,
+  clampShellRatio,
   clampSplit,
   closePane,
   createPaneState,
@@ -24,6 +25,7 @@ import {
   removeSession,
   setLinkedSplits,
   setRatio,
+  shellRatioAt,
   showSession,
   splitPane,
   splitterSpecs,
@@ -438,5 +440,25 @@ describe("parsePaneState", () => {
     const oldShared = parsePaneState({layout: "grid", splits: {gridX: 0.4}});
     expect(nodeRatios(oldShared.root)).toEqual([0.5, 0.4, 0.4]);
     expect(parsePaneState({layout: "single", panes: ["a"]}).root).toEqual(L(1, "a"));
+  });
+});
+
+describe("side shell panel", () => {
+  it("defaults to 35% and clamps to 15–85%", () => {
+    expect(clampShellRatio(undefined)).toBe(0.35);
+    expect(clampShellRatio("x")).toBe(0.35);
+    expect(clampShellRatio(NaN)).toBe(0.35);
+    expect(clampShellRatio(0.5)).toBe(0.5);
+    expect(clampShellRatio(0.01)).toBe(0.15);
+    expect(clampShellRatio(2)).toBe(0.85);
+  });
+
+  it("turns the splitter position into the panel's share of the terminal area", () => {
+    // Pane 100..564 (464px): terminal area = 464 - 44 header/prompt - 20 toolbar = 400px, ending at 544
+    expect(shellRatioAt(100, 464, 344)).toBeCloseTo(0.5);
+    expect(shellRatioAt(100, 464, 444)).toBeCloseTo(0.25);
+    expect(shellRatioAt(100, 464, 540)).toBe(0.15);
+    expect(shellRatioAt(100, 464, 0)).toBe(0.85);
+    expect(shellRatioAt(100, 64, 100)).toBe(0.35);
   });
 });

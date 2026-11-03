@@ -14,6 +14,7 @@ import {
   assignSession,
   canAssign,
   canSplit,
+  clampShellRatio,
   closePane,
   createPaneState,
   crossHandle,
@@ -36,6 +37,7 @@ import {
   parsePaneState,
   setLinkedSplits,
   setRatio,
+  shellRatioAt,
   showSession,
   Side,
   splitPane,
@@ -642,6 +644,177 @@ function renderPanePromptOf(sessionId: string): void {
   const pane = leafId === null ? undefined : paneElements.get(leafId);
   if (pane) renderPanePrompt(pane, sessionId);
 }
+
+// ---- Side shell: a plain shell under a session's agent terminal, inside the pane showing it ----
+// It belongs to the session (moves with it between panes and workspaces), keeps running while
+// hidden, and dies with the session. Not restored after a restart.
+interface SideShell {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  panel: HTMLDivElement;
+  host: HTMLDivElement;
+  visible: boolean;
+}
+
+const sideShells = new Map<string, SideShell>();
+const SHELL_RATIO_KEY = "sideShellRatio";
+let shellRatio = loadShellRatio();
+
+function loadShellRatio(): number {
+  try {
+    return clampShellRatio(Number(localStorage.getItem(SHELL_RATIO_KEY) ?? NaN));
+  } catch {
+    return clampShellRatio(undefined);
+  }
+}
+
+function saveShellRatio() {
+  try {
+    localStorage.setItem(SHELL_RATIO_KEY, String(shellRatio));
+  } catch (error) {
+    console.error("Error saving the side shell height:", error);
+  }
+}
+
+function terminalOptions() {
+  return {
+    cursorBlink: terminalSettings.cursorBlink,
+    fontSize: terminalSettings.fontSize,
+    fontFamily: terminalSettings.fontFamily,
+    theme: THEME_PRESETS[terminalSettings.theme] || THEME_PRESETS["macos-dark"],
+  };
+}
+
+// The breadcrumb's >_ needs a running session with a directory
+function canOpenSideShell(session: Session): boolean {
+  return session.hasActivePty && !!(session.worktreePath || session.config.projectDir);
+}
+
+function createSideShell(sessionId: string): SideShell {
+  const terminal = new Terminal(terminalOptions());
+  const fitAddon = new FitAddon();
+  terminal.loadAddon(fitAddon);
+  const panel = document.createElement("div");
+  panel.className = "side-shell";
+  const handle = document.createElement("div");
+  handle.className = "side-shell-handle";
+  handle.title = "Drag to resize";
+  const host = document.createElement("div");
+  host.className = "side-shell-host";
+  panel.append(handle, host);
+  handle.addEventListener("mousedown", (e) => startShellResize(e, panel));
+  terminal.onData((data) => ipcRenderer.send("side-shell-input", sessionId, data));
+  return {terminal, fitAddon, panel, host, visible: true};
+}
+
+async function toggleSideShell(sessionId: string) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const existing = sideShells.get(sessionId);
+  if (existing) {
+    existing.visible = !existing.visible;
+    afterSideShellChange();
+    if (existing.visible) existing.terminal.focus();
+    else session.terminal?.focus();
+    return;
+  }
+  if (!canOpenSideShell(session)) return;
+  const shell = createSideShell(sessionId);
+  sideShells.set(sessionId, shell);
+  afterSideShellChange();
+  const dims = shell.fitAddon.proposeDimensions();
+  try {
+    const result = await ipcRenderer.invoke("side-shell-start", sessionId, dims?.cols ?? 80, dims?.rows ?? 12) as
+      {ok: boolean; error?: string};
+    if (!result.ok) {
+      disposeSideShell(sessionId);
+      showToast(result.error ?? "Could not start a shell", "error");
+      return;
+    }
+    shell.terminal.focus();
+  } catch (error) {
+    disposeSideShell(sessionId);
+    showToast(`side-shell-start failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
+// Session closed or deleted, or the shell exited: main kills/has killed the process
+function disposeSideShell(sessionId: string) {
+  const shell = sideShells.get(sessionId);
+  if (!shell) return;
+  sideShells.delete(sessionId);
+  shell.panel.remove();
+  shell.terminal.dispose();
+  afterSideShellChange();
+}
+
+function afterSideShellChange() {
+  renderPanes();
+  renderPaneBreadcrumbs();
+  window.dispatchEvent(new Event("resize"));
+}
+
+// Place each shown session's visible shell panel into its pane; others leave the DOM (state kept)
+function renderSideShells(shown: Set<string>) {
+  sideShells.forEach((shell, id) => {
+    if ((!shell.visible || !shown.has(id)) && shell.panel.isConnected) shell.panel.remove();
+  });
+  paneElements.forEach((pane, leafId) => {
+    const id = paneSession(paneState, leafId);
+    const shell = id ? sideShells.get(id) : undefined;
+    const open = !!shell && shell.visible && !!sessions.get(id!)?.element;
+    pane.classList.toggle("shell-open", open);
+    pane.style.setProperty("--shell-ratio", String(shellRatio));
+    if (!open || !shell) return;
+    if (shell.panel.parentElement !== pane) pane.appendChild(shell.panel);
+    // First time on screen: open now so xterm measures a real cell size
+    if (!shell.terminal.element) shell.terminal.open(shell.host);
+  });
+}
+
+function refitSideShells() {
+  sideShells.forEach((shell, id) => {
+    if (!shell.panel.isConnected || !shell.terminal.element) return;
+    const dims = shell.fitAddon.proposeDimensions();
+    if (!dims) return;
+    shell.fitAddon.fit();
+    ipcRenderer.send("side-shell-resize", id, dims.cols, dims.rows);
+  });
+}
+
+// Splitter on the panel's top edge: one height for every pane, remembered across restarts
+function startShellResize(e: MouseEvent, panel: HTMLElement) {
+  const pane = panel.parentElement;
+  if (!pane) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const onMove = (ev: MouseEvent) => {
+    const rect = pane.getBoundingClientRect();
+    shellRatio = shellRatioAt(rect.top, rect.height, ev.clientY);
+    paneElements.forEach(p => p.style.setProperty("--shell-ratio", String(shellRatio)));
+    refitVisibleTerminals();
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.classList.remove("shell-resizing");
+    saveShellRatio();
+  };
+  document.body.classList.add("shell-resizing");
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+ipcRenderer.on("side-shell-output", (_event, sessionId: string, data: string) => {
+  sideShells.get(sessionId)?.terminal.write(data);
+});
+
+// `exit` in the shell closes the panel; >_ starts a fresh one
+ipcRenderer.on("side-shell-exit", (_event, sessionId: string) => {
+  const hadFocus = sideShells.get(sessionId)?.panel.contains(document.activeElement);
+  disposeSideShell(sessionId);
+  if (hadFocus) sessions.get(sessionId)?.terminal?.focus();
+});
 
 function createTerminalUI(sessionId: string) {
   const themeColors = THEME_PRESETS[terminalSettings.theme] || THEME_PRESETS["macos-dark"];
@@ -1582,7 +1755,10 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
     : runtime[session.id]?.externallyOpen ? "external"
     : session.hasActivePty ? "active" : "free";
 
-  const sig = JSON.stringify([session.id, projectName, session.name, dirName, dirMode, branch]);
+  const shellState = sideShells.get(session.id)?.visible ? "open"
+    : sideShells.has(session.id) ? "hidden"
+    : canOpenSideShell(session) ? "closed" : "off";
+  const sig = JSON.stringify([session.id, projectName, session.name, dirName, dirMode, branch, shellState]);
   if (crumb.dataset.sig === sig) return;
   crumb.dataset.sig = sig;
 
@@ -1627,6 +1803,19 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
     });
     nodes.push(btn);
   }
+  const shellBtn = document.createElement("button");
+  shellBtn.className = `breadcrumb-shell${shellState === "open" ? " active" : ""}`;
+  shellBtn.draggable = false;
+  shellBtn.textContent = ">_";
+  shellBtn.disabled = shellState === "off";
+  shellBtn.title = shellState === "off" ? "Open the session to use a terminal here"
+    : shellState === "open" ? "Hide the terminal (it keeps running)"
+    : `Open a terminal in ${session.worktreePath || dir}`;
+  shellBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void toggleSideShell(session.id);
+  });
+  nodes.push(shellBtn);
   if (branch) {
     const branchEl = document.createElement("span");
     branchEl.className = "breadcrumb-branch";
@@ -2278,7 +2467,7 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
   // a slightly moved click on a header button, the 📁 picker or the branch must not start a pane drag
   let pressedOnAction = false;
   header.addEventListener("mousedown", (e) => {
-    pressedOnAction = !!(e.target as HTMLElement).closest(".pane-action, .breadcrumb-dir, .breadcrumb-branch");
+    pressedOnAction = !!(e.target as HTMLElement).closest(".pane-action, .breadcrumb-dir, .breadcrumb-branch, .breadcrumb-shell");
   });
   header.addEventListener("dragstart", (e) => {
     if (!e.dataTransfer || paneTotal() < 2 || pressedOnAction) {
@@ -3097,6 +3286,7 @@ function renderPanes() {
     placeholder.textContent = !element && session ? `${session.name} — click to open` : "Drop a tab here";
   }
 
+  renderSideShells(shown);
   grid.classList.toggle("multi", treeLeaves.length > 1);
   buildSplitters(grid);
   applySplits(grid);
@@ -3134,6 +3324,7 @@ function refitVisibleTerminals() {
       ipcRenderer.send("session-resize", id, proposedDimensions.cols, proposedDimensions.rows);
     }
   }
+  refitSideShells();
 }
 
 function commitPanes(next: PaneState) {
@@ -3412,6 +3603,7 @@ function closeSession(sessionId: string) {
 
   // Remove tab
   document.getElementById(`tab-${sessionId}`)?.remove();
+  disposeSideShell(sessionId);
 
   // Update session state
   session.terminal = null;
@@ -3454,6 +3646,7 @@ function deleteSession(sessionId: string) {
   }
   document.getElementById(`tab-${sessionId}`)?.remove();
   document.getElementById(`sidebar-${sessionId}`)?.remove();
+  disposeSideShell(sessionId);
 
   // Remove from sessions map
   sessions.delete(sessionId);
@@ -3591,6 +3784,7 @@ ipcRenderer.on("session-deleted", (_event, sessionId: string) => {
     if (session.terminal) session.terminal.dispose();
     document.getElementById(`tab-${sessionId}`)?.remove();
     document.getElementById(`sidebar-${sessionId}`)?.remove();
+    disposeSideShell(sessionId);
     sessions.delete(sessionId);
     sessionModes.delete(sessionId);
     sessionModels.delete(sessionId);
@@ -4574,6 +4768,7 @@ function applySettingsToAllTerminals() {
       }
     }
   });
+  sideShells.forEach(shell => Object.assign(shell.terminal.options, terminalOptions()));
   refitVisibleTerminals();
 }
 
