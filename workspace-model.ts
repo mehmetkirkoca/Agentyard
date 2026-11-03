@@ -83,6 +83,18 @@ export function switchWorkspace(state: WorkspaceState, id: string): WorkspaceSta
   return {...state, activeId: id};
 }
 
+// Drag order in the workspace bar (Default included)
+export function reorderWorkspace(state: WorkspaceState, movedId: string, targetId: string, after: boolean): WorkspaceState {
+  const moved = find(state, movedId);
+  if (!moved || movedId === targetId || !find(state, targetId)) return state;
+  const rest = state.workspaces.filter(w => w.id !== movedId);
+  const index = rest.findIndex(w => w.id === targetId);
+  const insertAt = after ? index + 1 : index;
+  const workspaces = [...rest.slice(0, insertAt), moved, ...rest.slice(insertAt)];
+  if (workspaces.every((w, i) => w === state.workspaces[i])) return state;
+  return {...state, workspaces};
+}
+
 // Default stays; the deleted workspace's members are written to Default explicitly (so they reopen
 // there) and its tabs join Default's tab row, not its panes
 export function deleteWorkspace(state: WorkspaceState, id: string): WorkspaceState {
@@ -168,10 +180,10 @@ export function parseWorkspaceState(raw: unknown, legacyPanes: unknown): Workspa
     if (typeof w.name !== "string" || !w.name.trim()) continue;
     workspaces.push({id: w.id, name: w.name.trim(), panes: parsePaneState(w.panes)});
   }
-  const defaultIndex = workspaces.findIndex(w => w.id === DEFAULT_WORKSPACE_ID);
-  const fallback = {id: DEFAULT_WORKSPACE_ID, name: DEFAULT_WORKSPACE_NAME, panes: createPaneState()};
-  const def = defaultIndex >= 0 ? workspaces.splice(defaultIndex, 1)[0] : fallback;
-  workspaces.unshift(def);
+  // Default keeps its dragged place; a missing one comes back first
+  if (!workspaces.some(w => w.id === DEFAULT_WORKSPACE_ID)) {
+    workspaces.unshift({id: DEFAULT_WORKSPACE_ID, name: DEFAULT_WORKSPACE_NAME, panes: createPaneState()});
+  }
 
   const ids = new Set(workspaces.map(w => w.id));
   const membership: Record<string, string> = {};

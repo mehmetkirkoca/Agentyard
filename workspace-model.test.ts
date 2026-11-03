@@ -12,6 +12,7 @@ import {
   pruneWorkspaces,
   removeSessionFromWorkspaces,
   renameWorkspace,
+  reorderWorkspace,
   setSidebarFilter,
   showsInSidebar,
   switchWorkspace,
@@ -80,6 +81,37 @@ describe("workspaces", () => {
     const s = createWorkspaceState();
     const p = panes(L(1, "x"));
     expect(activeWorkspace(withActivePanes(s, p)).panes).toBe(p);
+  });
+});
+
+describe("reorderWorkspace", () => {
+  const three = () => addWorkspace(addWorkspace(addWorkspace(createWorkspaceState(), "w2", "B"), "w3", "C"), "w4", "D");
+  const ids = (s: WorkspaceState) => s.workspaces.map(w => w.id);
+
+  it("moves a workspace before or after another", () => {
+    expect(ids(reorderWorkspace(three(), "w4", "w2", false))).toEqual(["default", "w4", "w2", "w3"]);
+    expect(ids(reorderWorkspace(three(), "w2", "w4", true))).toEqual(["default", "w3", "w4", "w2"]);
+    expect(ids(reorderWorkspace(three(), "w2", "w3", true))).toEqual(["default", "w3", "w2", "w4"]);
+  });
+
+  it("moves Default like any other workspace", () => {
+    expect(ids(reorderWorkspace(three(), "default", "w3", true))).toEqual(["w2", "w3", "default", "w4"]);
+    expect(ids(reorderWorkspace(three(), "w3", "default", false))).toEqual(["w3", "default", "w2", "w4"]);
+  });
+
+  it("keeps the active workspace and its panes", () => {
+    const before = three();
+    const s = reorderWorkspace(before, "w4", "w2", false);
+    expect(s.activeId).toBe("w4");
+    expect(activeWorkspace(s).panes).toBe(activeWorkspace(before).panes);
+  });
+
+  it("changes nothing for the same place, itself or unknown ids", () => {
+    const s = three();
+    expect(reorderWorkspace(s, "w2", "w3", false)).toBe(s);
+    expect(reorderWorkspace(s, "w2", "w2", true)).toBe(s);
+    expect(reorderWorkspace(s, "nope", "w2", true)).toBe(s);
+    expect(reorderWorkspace(s, "w2", "nope", true)).toBe(s);
   });
 });
 
@@ -230,6 +262,11 @@ describe("parseWorkspaceState", () => {
     expect(visibleSessions(s.workspaces[2].panes)).toEqual(["a"]);
   });
 
+  it("keeps a dragged (and renamed) Default where it was", () => {
+    const raw = {workspaces: [{id: "w2", name: "B"}, {id: "default", name: "Main"}], activeId: "w2", membership: {}};
+    expect(parseWorkspaceState(raw, null).workspaces.map(w => w.name)).toEqual(["B", "Main"]);
+  });
+
   it("keeps an unrecorded session found in several workspaces' panes in the first one only", () => {
     const leafX = {kind: "leaf", id: 1, session: "x"};
     const raw = {
@@ -244,12 +281,6 @@ describe("parseWorkspaceState", () => {
     expect(visibleSessions(s.workspaces[0].panes)).toEqual(["x"]);
     expect(visibleSessions(s.workspaces[1].panes)).toEqual([]);
     expect(s.workspaces[1].panes.tabOrder).toEqual([]);
-  });
-
-  it("moves a stored Default to the front", () => {
-    const raw = {workspaces: [{id: "w2", name: "B"}, {id: "default", name: "Main"}], activeId: "w2", membership: {}};
-    const s = parseWorkspaceState(raw, null);
-    expect(s.workspaces.map(w => w.name)).toEqual(["Main", "B"]);
   });
 
   it("falls back to the legacy layout for garbage", () => {

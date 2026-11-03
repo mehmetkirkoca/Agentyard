@@ -62,6 +62,7 @@ import {
   pruneWorkspaces,
   removeSessionFromWorkspaces,
   renameWorkspace,
+  reorderWorkspace,
   setSidebarFilter,
   showsInSidebar,
   switchWorkspace,
@@ -408,6 +409,7 @@ const PANE_STATE_KEY = "paneLayout";
 const WORKSPACES_KEY = "workspaces";
 const SESSION_DRAG_MIME = "application/x-agentyard-session";
 const PANE_DRAG_MIME = "application/x-agentyard-pane";
+const WORKSPACE_DRAG_MIME = "application/x-agentyard-workspace";
 // Source of truth for workspaces; paneState is the active workspace's working copy
 let workspaceState: WorkspaceState = loadWorkspaceState();
 let paneState: PaneState = activeWorkspace(workspaceState).panes;
@@ -2199,6 +2201,9 @@ function startEditingWorkspaceName(id: string) {
   input.type = "text";
   input.className = "workspace-name-input";
   input.value = workspace.name;
+  // Text selection in the input instead of dragging the chip
+  const wasDraggable = chip.draggable;
+  chip.draggable = false;
   nameEl.replaceWith(input);
   input.focus();
   input.select();
@@ -2217,6 +2222,7 @@ function startEditingWorkspaceName(id: string) {
     nameEl.textContent = name;
     chip.title = id === workspaceState.activeId ? name : `${name}: drop a tab here to move it`;
     input.replaceWith(nameEl);
+    chip.draggable = wasDraggable;
   };
   input.addEventListener("keydown", (e) => {
     e.stopPropagation();
@@ -2226,6 +2232,55 @@ function startEditingWorkspaceName(id: string) {
   input.addEventListener("blur", () => finish(true));
   input.addEventListener("click", (e) => e.stopPropagation());
   input.addEventListener("mousedown", (e) => e.stopPropagation());
+}
+
+function isWorkspaceDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes(WORKSPACE_DRAG_MIME);
+}
+
+function clearWorkspaceDropMarkers() {
+  document.querySelectorAll(".workspace-chip.drop-before, .workspace-chip.drop-after")
+    .forEach(el => el.classList.remove("drop-before", "drop-after"));
+}
+
+// Drag a chip onto another to reorder the bar
+function wireWorkspaceReorder(chip: HTMLElement, id: string) {
+  chip.draggable = true;
+  chip.addEventListener("dragstart", (e) => {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(WORKSPACE_DRAG_MIME, id);
+    e.dataTransfer.effectAllowed = "move";
+    chip.classList.add("dragging");
+  });
+  chip.addEventListener("dragend", () => {
+    chip.classList.remove("dragging");
+    clearWorkspaceDropMarkers();
+  });
+  chip.addEventListener("dragover", (e) => {
+    if (!isWorkspaceDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = "move";
+    const rect = chip.getBoundingClientRect();
+    const after = e.clientX > rect.left + rect.width / 2;
+    clearWorkspaceDropMarkers();
+    chip.classList.add(after ? "drop-after" : "drop-before");
+  });
+  chip.addEventListener("dragleave", (e) => {
+    if (!chip.contains(e.relatedTarget as Node | null)) chip.classList.remove("drop-before", "drop-after");
+  });
+  chip.addEventListener("drop", (e) => {
+    if (!isWorkspaceDrag(e)) return;
+    const after = chip.classList.contains("drop-after");
+    clearWorkspaceDropMarkers();
+    e.preventDefault();
+    e.stopPropagation();
+    const base = currentWorkspaces();
+    const next = reorderWorkspace(base, e.dataTransfer!.getData(WORKSPACE_DRAG_MIME), id, after);
+    if (next === base) return;
+    workspaceState = next;
+    savePaneState();
+    renderWorkspaceBar();
+  });
 }
 
 // One chip per workspace; background chips show how many of their sessions wait for input
@@ -2263,6 +2318,7 @@ function renderWorkspaceBar() {
         {label: "Delete", run: () => removeWorkspace(id), disabled: id === DEFAULT_WORKSPACE_ID},
       ]);
     });
+    wireWorkspaceReorder(chip, id);
     chip.addEventListener("dragover", (e) => {
       if (!isSessionDrag(e) || active) return;
       e.preventDefault();

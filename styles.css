@@ -712,6 +712,19 @@ body {
     outline: 1px solid var(--vsc-focus);
   }
 
+  /* Insertion marker while reordering workspaces */
+  .workspace-chip.drop-before {
+    box-shadow: inset 2px 0 0 var(--vsc-focus);
+  }
+
+  .workspace-chip.drop-after {
+    box-shadow: inset -2px 0 0 var(--vsc-focus);
+  }
+
+  .workspace-chip.dragging {
+    opacity: 0.5;
+  }
+
   .workspace-waiting {
     color: #e5a50a;
   }
