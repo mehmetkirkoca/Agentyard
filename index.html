@@ -19,6 +19,7 @@
       <div class="sidebar">
         <div class="sidebar-header">
           <h1 class="sidebar-title">Agentyard</h1>
+          <button id="workspace-filter" class="settings-btn workspace-filter-btn" title="Show only this workspace's sessions" aria-label="Filter by workspace"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg></button>
           <button id="open-settings" class="settings-btn" title="Settings" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.9 5.9L3.5 17.5a1.8 1.8 0 0 0 2.5 2.5l5.3-5.3a4.5 4.5 0 0 0 5.9-5.9l-2.8 2.8-2.4-.6-.6-2.4z"/></svg></button>
         </div>
 
@@ -63,6 +64,11 @@
 
       <!-- Main content -->
       <div class="flex-1 min-w-0 flex flex-col">
+        <!-- Workspaces: each has its own tabs and pane layout -->
+        <div id="workspace-bar" class="workspace-bar">
+          <div id="workspace-list" class="workspace-list"></div>
+          <button id="workspace-add" class="workspace-add-btn" title="New workspace" aria-label="New workspace">+</button>
+        </div>
         <!-- Tabs -->
         <div class="tabs-row">
           <button id="toggle-sidebar" class="sidebar-toggle-btn" title="Toggle sidebar (Ctrl+Shift+B)" aria-label="Toggle sidebar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>

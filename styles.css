@@ -117,6 +117,18 @@ body {
     opacity: 1;
   }
 
+  /* Sidebar filter by the active workspace: highlighted while on */
+  .workspace-filter-btn {
+    margin-left: auto;
+    opacity: 0.6;
+  }
+
+  .workspace-filter-btn.active {
+    opacity: 1;
+    color: var(--vsc-focus);
+    background-color: rgba(90, 93, 94, 0.31);
+  }
+
   .sidebar-content {
     @apply flex-1 overflow-y-auto;
   }
@@ -619,6 +631,87 @@ body {
     display: none;
   }
 
+  /* Workspace strip above the tab row; its empty parts move the window like the tab row */
+  .workspace-bar {
+    @apply flex flex-none items-center select-none;
+    height: 24px;
+    gap: 2px;
+    padding: 0 6px;
+    background-color: var(--vsc-sidebar);
+    border-bottom: 1px solid var(--vsc-border);
+    -webkit-app-region: drag;
+  }
+
+  .workspace-list {
+    @apply flex items-center min-w-0 overflow-x-auto;
+    gap: 2px;
+  }
+
+  .workspace-list::-webkit-scrollbar {
+    height: 0;
+  }
+
+  .workspace-chip,
+  .workspace-add-btn {
+    -webkit-app-region: no-drag;
+  }
+
+  .workspace-chip {
+    @apply flex flex-none items-center rounded cursor-pointer;
+    height: 18px;
+    gap: 4px;
+    padding: 0 8px;
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .workspace-chip:hover {
+    background-color: var(--vsc-hover);
+    color: var(--vsc-fg-strong);
+  }
+
+  .workspace-chip.active {
+    background-color: var(--vsc-active);
+    color: var(--vsc-fg-strong);
+  }
+
+  .workspace-chip.drop-target {
+    outline: 1px solid var(--vsc-focus);
+  }
+
+  .workspace-waiting {
+    color: #e5a50a;
+  }
+
+  .workspace-name-input {
+    width: 110px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 11px;
+    color: var(--vsc-fg-strong);
+    background-color: var(--vsc-input);
+    border: 1px solid var(--vsc-focus);
+    outline: none;
+  }
+
+  .workspace-add-btn {
+    @apply flex flex-none items-center justify-center rounded cursor-pointer;
+    width: 18px;
+    height: 18px;
+    font-size: 13px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .workspace-add-btn:hover {
+    background-color: var(--vsc-hover);
+    color: var(--vsc-fg-strong);
+  }
+
+  /* Tab of another workspace: kept in the DOM, not shown */
+  .tabs-row .tab.ws-hidden {
+    display: none;
+  }
+
   .tabs-container {
     @apply flex flex-1 min-w-0 overflow-x-auto overflow-y-hidden select-none;
     height: 35px;
@@ -941,6 +1034,11 @@ body {
     color: var(--vsc-fg-dim);
     background-color: transparent;
     cursor: default;
+  }
+
+  /* Opens over the window drag regions (workspace bar, tab row): without this the OS takes the mouse */
+  .context-menu {
+    -webkit-app-region: no-drag;
   }
 
   .context-menu-separator {

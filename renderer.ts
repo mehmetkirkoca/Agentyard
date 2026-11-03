@@ -34,8 +34,6 @@ import {
   paneSession,
   PaneState,
   parsePaneState,
-  pruneSessions,
-  removeSession,
   setLinkedSplits,
   setRatio,
   showSession,
@@ -48,6 +46,27 @@ import {
   togglePanePin,
   visibleSessions,
 } from "./pane-layout";
+import {
+  activeWorkspace,
+  addWorkspace,
+  createWorkspaceState,
+  DEFAULT_WORKSPACE_ID,
+  deleteWorkspace,
+  forgetSession,
+  moveSessionTo,
+  nextWorkspaceName,
+  parseWorkspaceState,
+  pruneWorkspaces,
+  removeSessionFromWorkspaces,
+  renameWorkspace,
+  setSidebarFilter,
+  showsInSidebar,
+  switchWorkspace,
+  waitingByWorkspace,
+  withActivePanes,
+  WorkspaceState,
+  workspaceOf,
+} from "./workspace-model";
 import * as path from "path";
 
 interface Session {
@@ -377,10 +396,14 @@ let mcpServers: McpServer[] = [];
 let mcpPollerActive = false;
 let terminalSettings: TerminalSettings = { ...DEFAULT_SETTINGS };
 
+// Read only, to migrate the pre-workspace layout into the Default workspace
 const PANE_STATE_KEY = "paneLayout";
+const WORKSPACES_KEY = "workspaces";
 const SESSION_DRAG_MIME = "application/x-agentyard-session";
 const PANE_DRAG_MIME = "application/x-agentyard-pane";
-let paneState: PaneState = loadPaneState();
+// Source of truth for workspaces; paneState is the active workspace's working copy
+let workspaceState: WorkspaceState = loadWorkspaceState();
+let paneState: PaneState = activeWorkspace(workspaceState).panes;
 
 // Track activity timers for each session
 const activityTimers = new Map<string, NodeJS.Timeout>();
@@ -689,9 +712,22 @@ function addSession(persistedSession: PersistedSession, hasActivePty: boolean, r
   return session;
 }
 
+// Pane sessions reopened by a workspace switch or at startup (sessionId → the workspace whose panes
+// showed it): they come back in place, without switching workspace or taking the focus, so the
+// session the user just clicked stays shown
+const backgroundReopens = new Map<string, string>();
+
+function requestReopen(sessionId: string, backgroundOf?: string) {
+  if (backgroundOf) backgroundReopens.set(sessionId, backgroundOf);
+  else backgroundReopens.delete(sessionId);
+  ipcRenderer.send("reopen-session", sessionId);
+}
+
 function activateSession(sessionId: string) {
   const session = sessions.get(sessionId);
   if (!session) return;
+  const backgroundOf = backgroundReopens.get(sessionId);
+  backgroundReopens.delete(sessionId);
 
   // If terminal UI doesn't exist yet, create it
   if (!session.terminal) {
@@ -703,10 +739,28 @@ function activateSession(sessionId: string) {
 
   session.hasActivePty = true;
   updateSessionState(sessionId, true);
+  if (backgroundOf !== undefined) {
+    if (workspaceOf(workspaceState, sessionId) === null) {
+      workspaceState = moveSessionTo(currentWorkspaces(), sessionId, backgroundOf);
+      paneState = activeWorkspace(workspaceState).panes;
+      savePaneState();
+    }
+  } else {
+    enterSessionWorkspace(sessionId);
+  }
 
   // Add tab if it doesn't exist
   if (!document.getElementById(`tab-${sessionId}`)) {
     addTab(sessionId, session.name);
+  }
+
+  if (backgroundOf !== undefined) {
+    // Shown where its pane is (if it still is); takes the focus only when that pane has it
+    renderPanes();
+    window.dispatchEvent(new Event("resize"));
+    syncActiveSession(focusedSession(paneState) === sessionId);
+    stickyPrompts.get(sessionId)?.refreshPrompts();
+    return;
   }
 
   // Switch to this session
@@ -1143,12 +1197,15 @@ function renderSidebar() {
 
 function renderSidebarNow(list: HTMLElement) {
 
-  const metas: PersistedSession[] = Array.from(sessions.values()).map(s => ({
-    ...s.meta,
-    name: s.name,
-    config: s.config,
-    status: s.status,
-  }));
+  // Workspace filter: only the active workspace's sessions (unrecorded ones count as Default)
+  const metas: PersistedSession[] = Array.from(sessions.values())
+    .filter(s => showsInSidebar(workspaceState, s.id))
+    .map(s => ({
+      ...s.meta,
+      name: s.name,
+      config: s.config,
+      status: s.status,
+    }));
   const known = new Set(projects.map(p => p.id));
   const orphans = metas.filter(m => !m.projectId || !known.has(m.projectId));
   const allProjects = [...projects];
@@ -1159,7 +1216,7 @@ function renderSidebarNow(list: HTMLElement) {
   }
   const now = Date.now();
   const groups = buildSidebar(allProjects, allMetas, now, 7, loadProjectOrder()).filter(
-    g => g.project.id !== OTHER_PROJECT_ID || g.recent.length + g.older.length > 0,
+    g => (g.project.id !== OTHER_PROJECT_ID && !workspaceState.sidebarFilter) || g.recent.length + g.older.length > 0,
   );
   const orderedIds = groups.map(g => g.project.id).filter(id => id !== OTHER_PROJECT_ID);
 
@@ -1305,7 +1362,7 @@ function handleSessionClick(sessionId: string) {
     switchToSession(sessionId);
   } else {
     // Reopen the session
-    ipcRenderer.send("reopen-session", sessionId);
+    requestReopen(sessionId);
   }
 }
 
@@ -1358,6 +1415,7 @@ function addTab(sessionId: string, name: string) {
   const beforeId = tabInsertBefore(paneState.tabOrder, sessionId, openTabIds());
   const before = beforeId ? document.getElementById(`tab-${beforeId}`) : null;
   tabsContainer.insertBefore(tab, before);
+  applyTabVisibility();
 }
 
 function markSessionAsUnread(sessionId: string) {
@@ -1680,7 +1738,7 @@ async function openDirPicker(sessionId: string): Promise<void> {
         const result = await ipcRenderer.invoke("set-session-dir", sessionId, info.dir, wasRunning) as
           {ok: boolean; error?: string; warning?: string; session?: PersistedSession};
         close();
-        if (!result.ok && wasRunning) ipcRenderer.send("reopen-session", sessionId);
+        if (!result.ok && wasRunning) requestReopen(sessionId);
         if (result.ok) {
           if (result.warning) showToast(result.warning, "warning");
           // Keep the local copy in step with the store, so the pane breadcrumb shows the new dir/branch.
@@ -1690,7 +1748,7 @@ async function openDirPicker(sessionId: string): Promise<void> {
             moved.config = result.session.config;
           }
           refreshPaneBreadcrumbs();
-          ipcRenderer.send("reopen-session", sessionId);
+          requestReopen(sessionId);
         } else {
           showToast(result.error ?? "Could not change directory", "error");
         }
@@ -1757,22 +1815,193 @@ ipcRenderer.on("session-error", async (_event, message: string) => {
   }
 });
 
-// Split panes: a tree of panes, each showing one session's terminal; the focused pane decides activeSessionId
-function loadPaneState(): PaneState {
+// Split panes: a tree of panes, each showing one session's terminal; the focused pane decides activeSessionId.
+// Each workspace keeps its own tree; the stored state falls back to the legacy single layout.
+function loadWorkspaceState(): WorkspaceState {
+  let legacy: unknown = null;
   try {
     const raw = localStorage.getItem(PANE_STATE_KEY);
-    return parsePaneState(raw ? JSON.parse(raw) : null);
+    legacy = raw ? JSON.parse(raw) : null;
   } catch (error) {
-    console.error("Error restoring pane layout:", error);
-    return createPaneState();
+    console.error("Error reading the legacy pane layout:", error);
+  }
+  try {
+    const raw = localStorage.getItem(WORKSPACES_KEY);
+    return parseWorkspaceState(raw ? JSON.parse(raw) : null, legacy);
+  } catch (error) {
+    console.error("Error restoring workspaces:", error);
+    return createWorkspaceState(parsePaneState(legacy));
   }
 }
 
+// Workspace state with the live pane edits folded in
+function currentWorkspaces(): WorkspaceState {
+  return withActivePanes(workspaceState, paneState);
+}
+
 function savePaneState() {
+  workspaceState = currentWorkspaces();
   try {
-    localStorage.setItem(PANE_STATE_KEY, JSON.stringify(paneState));
+    localStorage.setItem(WORKSPACES_KEY, JSON.stringify(workspaceState));
   } catch (error) {
-    console.error("Error saving pane layout:", error);
+    console.error("Error saving workspaces:", error);
+  }
+}
+
+function commitWorkspaces(next: WorkspaceState) {
+  workspaceState = next;
+  paneState = activeWorkspace(next).panes;
+  savePaneState();
+  renderPanes();
+  applyTabVisibility();
+  renderWorkspaceBar();
+  renderSidebar();
+  window.dispatchEvent(new Event("resize"));
+}
+
+// Tabs of other workspaces stay in the DOM (status, names, drag), just hidden
+function applyTabVisibility() {
+  const active = workspaceState.activeId;
+  document.querySelectorAll<HTMLElement>("#tabs .tab").forEach(tab => {
+    const home = workspaceOf(workspaceState, tab.dataset.sessionId ?? "") ?? active;
+    tab.classList.toggle("ws-hidden", home !== active);
+  });
+}
+
+// Before a session is shown: a first open joins the active workspace, a session of another
+// workspace brings that workspace up
+function enterSessionWorkspace(sessionId: string) {
+  const home = workspaceOf(workspaceState, sessionId);
+  if (home === null) {
+    workspaceState = moveSessionTo(currentWorkspaces(), sessionId, workspaceState.activeId);
+    paneState = activeWorkspace(workspaceState).panes;
+    savePaneState();
+    // With the workspace filter on, the session only now belongs in the sidebar
+    if (workspaceState.sidebarFilter) renderSidebar();
+  } else if (home !== workspaceState.activeId) {
+    switchToWorkspace(home);
+  }
+}
+
+function switchToWorkspace(id: string) {
+  const next = switchWorkspace(currentWorkspaces(), id);
+  if (next.activeId === workspaceState.activeId) return;
+  commitWorkspaces(next);
+  syncActiveSession(true);
+  // First visit since start: the panes' sessions open now (live ones are left alone)
+  reopenVisibleSessions();
+}
+
+// Explicit move (tab dropped on a workspace chip, tab menu); the current workspace stays
+function moveSessionToWorkspace(sessionId: string, workspaceId: string) {
+  if (!sessions.has(sessionId) || workspaceOf(workspaceState, sessionId) === workspaceId) return;
+  commitWorkspaces(moveSessionTo(currentWorkspaces(), sessionId, workspaceId));
+  syncActiveSession(false);
+  const name = workspaceState.workspaces.find(w => w.id === workspaceId)?.name ?? "";
+  showToast(`Moved to ${name}`, "info");
+}
+
+function createWorkspace() {
+  const id = `ws-${Date.now().toString(36)}`;
+  commitWorkspaces(addWorkspace(currentWorkspaces(), id, nextWorkspaceName(workspaceState)));
+  syncActiveSession(true);
+  startEditingWorkspaceName(id);
+}
+
+function removeWorkspace(id: string) {
+  const workspace = workspaceState.workspaces.find(w => w.id === id);
+  if (!workspace || id === DEFAULT_WORKSPACE_ID) return;
+  if (!confirm(`Delete workspace "${workspace.name}"? Its tabs move to Default.`)) return;
+  commitWorkspaces(deleteWorkspace(currentWorkspaces(), id));
+  syncActiveSession(true);
+  reopenVisibleSessions();
+}
+
+// Inline rename on the chip (Enter saves, Escape cancels)
+function startEditingWorkspaceName(id: string) {
+  const chip = document.querySelector<HTMLElement>(`.workspace-chip[data-workspace-id="${CSS.escape(id)}"]`);
+  const nameEl = chip?.querySelector<HTMLElement>(".workspace-name");
+  const workspace = workspaceState.workspaces.find(w => w.id === id);
+  if (!chip || !nameEl || !workspace) return;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "workspace-name-input";
+  input.value = workspace.name;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (save: boolean) => {
+    if (done) return;
+    done = true;
+    const next = save ? renameWorkspace(currentWorkspaces(), id, input.value) : workspaceState;
+    if (next !== workspaceState) {
+      workspaceState = next;
+      savePaneState();
+    }
+    // renderWorkspaceBar skips while a rename input is in the bar, so take this one out first
+    input.remove();
+    renderWorkspaceBar();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("mousedown", (e) => e.stopPropagation());
+}
+
+// One chip per workspace; background chips show how many of their sessions wait for input
+function renderWorkspaceBar() {
+  const filter = document.getElementById("workspace-filter");
+  filter?.classList.toggle("active", workspaceState.sidebarFilter);
+  if (filter) {
+    filter.title = workspaceState.sidebarFilter
+      ? "Showing only this workspace's sessions (click to show all)"
+      : "Show only this workspace's sessions";
+  }
+  const list = document.getElementById("workspace-list");
+  if (!list || list.querySelector(".workspace-name-input")) return;
+  const waitingIds = Array.from(sessions.values())
+    .filter(s => s.hasActivePty && s.status === SessionStatus.WAITING)
+    .map(s => s.id);
+  const waiting = waitingByWorkspace(workspaceState, waitingIds);
+  list.innerHTML = "";
+  for (const workspace of workspaceState.workspaces) {
+    const id = workspace.id;
+    const active = id === workspaceState.activeId;
+    const chip = document.createElement("div");
+    chip.className = `workspace-chip${active ? " active" : ""}`;
+    chip.dataset.workspaceId = id;
+    const count = active ? 0 : waiting.get(id) ?? 0;
+    chip.innerHTML = `<span class="workspace-name">${escapeHtml(workspace.name)}</span>` +
+      (count > 0 ? `<span class="workspace-waiting" title="${count} waiting">${count}</span>` : "");
+    chip.title = active ? workspace.name : `${workspace.name}: drop a tab here to move it`;
+    chip.addEventListener("click", () => switchToWorkspace(id));
+    chip.addEventListener("dblclick", () => startEditingWorkspaceName(id));
+    chip.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, [
+        {label: "Rename…", run: () => startEditingWorkspaceName(id)},
+        {label: "Delete", run: () => removeWorkspace(id), disabled: id === DEFAULT_WORKSPACE_ID},
+      ]);
+    });
+    chip.addEventListener("dragover", (e) => {
+      if (!isSessionDrag(e) || active) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "move";
+      chip.classList.add("drop-target");
+    });
+    chip.addEventListener("dragleave", () => chip.classList.remove("drop-target"));
+    chip.addEventListener("drop", (e) => {
+      chip.classList.remove("drop-target");
+      if (!isSessionDrag(e) || active) return;
+      e.preventDefault();
+      moveSessionToWorkspace(e.dataTransfer!.getData(SESSION_DRAG_MIME), id);
+    });
+    list.appendChild(chip);
   }
 }
 
@@ -1841,6 +2070,9 @@ function openTabContextMenu(sessionId: string, x: number, y: number) {
   const inFocusedPane = paneSession(paneState, paneState.focused) === sessionId;
   const localClaude = isLocalClaude(session.config);
   const dir = session.worktreePath || session.config.projectDir;
+  const moveItems: ContextMenuItem[] = workspaceState.workspaces
+    .filter(w => w.id !== workspaceState.activeId)
+    .map(w => ({label: `Move to ${w.name}`, run: () => moveSessionToWorkspace(sessionId, w.id)}));
   openContextMenu(x, y, [
     {label: "Close", run: () => closeSession(sessionId)},
     {label: "Close Others", run: () => others.forEach(closeSession), disabled: others.length === 0},
@@ -1849,6 +2081,7 @@ function openTabContextMenu(sessionId: string, x: number, y: number) {
     "separator",
     {label: "Split Right", run: () => splitPaneWith(paneState.focused, "right", sessionId), disabled: inFocusedPane},
     {label: "Split Down", run: () => splitPaneWith(paneState.focused, "bottom", sessionId), disabled: inFocusedPane},
+    ...(moveItems.length > 0 ? ["separator" as const, ...moveItems] : []),
     "separator",
     {label: "Rename…", run: () => startEditingTabName(sessionId)},
     {label: "Fork", run: () => ipcRenderer.send("fork-session", sessionId), disabled: !canFork(session.config)},
@@ -1898,7 +2131,7 @@ function startEditingTabName(sessionId: string) {
 }
 
 function openTabIds(): string[] {
-  return Array.from(document.querySelectorAll<HTMLElement>("#tabs .tab")).map(tab => tab.dataset.sessionId ?? "");
+  return Array.from(document.querySelectorAll<HTMLElement>("#tabs .tab:not(.ws-hidden)")).map(tab => tab.dataset.sessionId ?? "");
 }
 
 function isSessionDrag(e: DragEvent): boolean {
@@ -3032,11 +3265,21 @@ function closePaneAt(leafId: number) {
 }
 
 // Placeholder of a session whose PTY is gone (e.g. after a restart): reopen it into this pane
-function reopenPaneSession(leafId: number) {
+// A placeholder click reopens like a tab click; a background reopen (workspace switch, startup)
+// keeps the focus where it is
+function reopenPaneSession(leafId: number, background = false) {
   const id = paneSession(paneState, leafId);
   const session = id ? sessions.get(id) : undefined;
   if (!id || !session || session.element) return;
-  handleSessionClick(id);
+  if (!background) {
+    handleSessionClick(id);
+    return;
+  }
+  if (runtime[id]?.externallyOpen) {
+    showToast("This conversation is open elsewhere (VSCode/terminal). Close it there first.", "warning");
+    return;
+  }
+  if (!session.hasActivePty) requestReopen(id, workspaceState.activeId);
 }
 
 function dropSessionOnPane(leafId: number, sessionId: string) {
@@ -3050,9 +3293,11 @@ function dropSessionOnPane(leafId: number, sessionId: string) {
   syncActiveSession(true);
 }
 
-// Closed or deleted session (its tab is already gone); its pane stays, empty
-function dropSessionFromPanes(sessionId: string) {
-  commitPanes(removeSession(paneState, sessionId, openTabIds()));
+// Closed or deleted session (its tab is already gone); its pane stays, empty. A closed session
+// keeps its workspace, a deleted one is forgotten.
+function dropSessionFromPanes(sessionId: string, deleted = false) {
+  const closed = removeSessionFromWorkspaces(currentWorkspaces(), sessionId, openTabIds());
+  commitWorkspaces(deleted ? forgetSession(closed, sessionId) : closed);
   syncActiveSession(false);
 }
 
@@ -3108,6 +3353,11 @@ function reorderTab(sessionId: string, target: {tab: HTMLElement; after: boolean
     }, {passive: false});
   }
 
+  document.getElementById("workspace-add")?.addEventListener("click", createWorkspace);
+  document.getElementById("workspace-filter")?.addEventListener("click", () => {
+    commitWorkspaces(setSidebarFilter(currentWorkspaces(), !workspaceState.sidebarFilter));
+  });
+  renderWorkspaceBar();
   document.getElementById("split-link-toggle")?.addEventListener("click", toggleLinkedSplits);
   document.querySelectorAll<HTMLButtonElement>(".layout-btn[data-layout]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -3137,6 +3387,7 @@ function reorderTab(sessionId: string, target: {tab: HTMLElement; after: boolean
 function switchToSession(sessionId: string) {
   const session = sessions.get(sessionId);
   if (!session || !session.element || !session.terminal || !session.fitAddon) return;
+  enterSessionWorkspace(sessionId);
   const next = showSession(paneState, sessionId);
   if (paneOfSession(next, sessionId) === null) {
     warnAllPinned();
@@ -3279,6 +3530,7 @@ ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStat
   refreshSessionIndicator(sessionId);
   applyTabStatus(sessionId);
   renderSidebar();
+  renderWorkspaceBar();
 });
 
 // A hook event may follow a new prompt in the transcript: refresh that session's pane prompt line
@@ -3344,7 +3596,7 @@ ipcRenderer.on("session-deleted", (_event, sessionId: string) => {
     sessionModels.delete(sessionId);
     renderSidebar();
     if (dirPickerSessionId === sessionId) closeDirPicker();
-    dropSessionFromPanes(sessionId);
+    dropSessionFromPanes(sessionId, true);
   }
 });
 
@@ -3355,9 +3607,11 @@ ipcRenderer.on("load-persisted-sessions", (_event, persistedSessions: PersistedS
   });
   renderSidebar();
   // Panes saved for sessions that no longer exist become empty
-  paneState = pruneSessions(paneState, new Set(sessions.keys()));
+  workspaceState = pruneWorkspaces(currentWorkspaces(), new Set(sessions.keys()));
+  paneState = activeWorkspace(workspaceState).panes;
   savePaneState();
   renderPanes();
+  renderWorkspaceBar();
   reopenVisibleSessions();
   void reportAgyPluginStatus();
 });
@@ -3375,13 +3629,11 @@ async function reportAgyPluginStatus() {
   }
 }
 
-// At startup the panes show their saved sessions without a PTY: reopen them instead of waiting for
-// a click. Background tabs stay closed. Main refuses a conversation open elsewhere (VSCode/terminal).
-// The focused pane goes last, since each reopened session takes the focus.
+// At startup (and on a workspace's first visit) the panes show their saved sessions without a PTY:
+// reopen them instead of waiting for a click. Background tabs stay closed. Main refuses a
+// conversation open elsewhere (VSCode/terminal). Only the focused pane's session takes the focus.
 function reopenVisibleSessions() {
-  const focused = paneState.focused;
-  const leafIds = [...paneElements.keys()].sort((a, b) => Number(a === focused) - Number(b === focused));
-  for (const leafId of leafIds) reopenPaneSession(leafId);
+  for (const leafId of paneElements.keys()) reopenPaneSession(leafId, true);
 }
 
 ipcRenderer.on("projects-updated", (_event, updated: Project[]) => {
