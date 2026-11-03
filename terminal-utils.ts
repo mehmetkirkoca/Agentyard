@@ -18,3 +18,13 @@ export function isTerminalReady(buffer: string, startPos: number = 0): boolean {
 export function isClaudeSessionReady(buffer: string): boolean {
   return CLAUDE_READY_PROMPT_PATTERN.test(buffer);
 }
+
+// Copy keys in a terminal (VS Code style): Ctrl+C copies only while text is selected, so without a
+// selection it still interrupts the program; Ctrl+Shift+C and Cmd+C copy the selection
+export function isCopyKey(
+  e: {type: string; code: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean},
+  hasSelection: boolean,
+): boolean {
+  if (e.type !== "keydown" || e.code !== "KeyC" || e.altKey || !hasSelection) return false;
+  return e.ctrlKey || e.metaKey;
+}

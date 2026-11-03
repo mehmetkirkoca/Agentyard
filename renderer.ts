@@ -5,7 +5,7 @@ import {buildPathPaste} from "./attach-utils";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
-import {isClaudeSessionReady} from "./terminal-utils";
+import {isClaudeSessionReady, isCopyKey} from "./terminal-utils";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
 import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
@@ -690,6 +690,44 @@ function canOpenSideShell(session: Session): boolean {
   return session.hasActivePty && !!(session.worktreePath || session.config.projectDir);
 }
 
+// xterm has no copy of its own: a selection goes to the clipboard as soon as it is made, and copy
+// keys put it there instead of reaching the program (Ctrl+C without a selection still interrupts).
+// A right click pastes the clipboard (bracketed when the program asks for it).
+function attachClipboard(term: Terminal, element: HTMLElement) {
+  // Otherwise (macOS default) the right click selects a word, which copy-on-select puts on the
+  // clipboard before the paste reads it
+  term.options.rightClickSelectsWord = false;
+  element.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    try {
+      const text = clipboard.readText();
+      if (text) term.paste(text);
+    } catch (error) {
+      showToast(`Paste failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+    term.focus();
+  });
+  term.onSelectionChange(() => {
+    if (!term.hasSelection()) return;
+    try {
+      clipboard.writeText(term.getSelection());
+    } catch (error) {
+      console.error("Copying the terminal selection failed:", error);
+    }
+  });
+  term.attachCustomKeyEventHandler((e) => {
+    if (!isCopyKey(e, term.hasSelection())) return true;
+    try {
+      clipboard.writeText(term.getSelection());
+    } catch (error) {
+      showToast(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+    term.clearSelection();
+    e.preventDefault();
+    return false;
+  });
+}
+
 function createSideShell(sessionId: string): SideShell {
   const terminal = new Terminal(terminalOptions());
   const fitAddon = new FitAddon();
@@ -702,6 +740,7 @@ function createSideShell(sessionId: string): SideShell {
   const host = document.createElement("div");
   host.className = "side-shell-host";
   panel.append(handle, host);
+  attachClipboard(terminal, host);
   handle.addEventListener("mousedown", (e) => startShellResize(e, panel));
   terminal.onData((data) => ipcRenderer.send("side-shell-input", sessionId, data));
   return {terminal, fitAddon, panel, host, visible: true};
@@ -832,6 +871,7 @@ function createTerminalUI(sessionId: string) {
   const sessionElement = document.createElement("div");
   sessionElement.className = "session-wrapper";
   sessionElement.id = `session-${sessionId}`;
+  attachClipboard(term, sessionElement);
 
   const container = document.getElementById("session-container");
   if (container) {
