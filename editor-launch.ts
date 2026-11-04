@@ -12,6 +12,8 @@ export interface EditorPreset {
 
 export const DEFAULT_EDITOR_ID = "vscode";
 export const CUSTOM_EDITOR_ID = "custom";
+// "None" in Settings: the breadcrumb shows no editor button
+export const NO_EDITOR_ID = "none";
 
 export const EDITOR_PRESETS: EditorPreset[] = [
   {id: "vscode", name: "VS Code", command: "code", paths: {
@@ -110,6 +112,7 @@ export type EditorLaunch = {ok: true; file: string; args: string[]} | {ok: false
 // Program and arguments to run without a shell, so a directory with spaces or quotes stays one argument
 export function buildEditorLaunch(input: EditorLaunchInput): EditorLaunch {
   const {editorId, customCommand, dir, pathEnv, platform, home, exists} = input;
+  if (editorId === NO_EDITOR_ID) return {ok: false, error: "The editor button is turned off in Settings"};
   if (editorId === CUSTOM_EDITOR_ID) {
     const [program, ...rest] = parseCommand(customCommand);
     if (!program) return {ok: false, error: "Set a custom editor command in Settings"};

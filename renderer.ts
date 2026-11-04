@@ -6,7 +6,7 @@ import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus,
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey} from "./terminal-utils";
-import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName} from "./editor-launch";
+import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-launch";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
 import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
@@ -102,7 +102,7 @@ interface TerminalSettings {
   theme: string; // Theme preset name
   cursorBlink: boolean;
   worktreeDir: string;
-  editor: string; // EDITOR_PRESETS id or "custom"
+  editor: string; // EDITOR_PRESETS id, "custom" or "none" (no button)
   editorCommand: string; // custom editor: program and arguments, {dir} = the session's directory
 }
 
@@ -1805,7 +1805,8 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
   const shellState = sideShells.get(session.id)?.visible ? "open"
     : sideShells.has(session.id) ? "hidden"
     : canOpenSideShell(session) ? "closed" : "off";
-  const editor = editorName(terminalSettings.editor, terminalSettings.editorCommand);
+  const editor = terminalSettings.editor === NO_EDITOR_ID ? null
+    : editorName(terminalSettings.editor, terminalSettings.editorCommand);
   const sig = JSON.stringify([session.id, projectName, session.name, dirName, dirMode, branch, shellState, editor]);
   if (crumb.dataset.sig === sig) return;
   crumb.dataset.sig = sig;
@@ -1864,18 +1865,20 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
     void toggleSideShell(session.id);
   });
   nodes.push(shellBtn);
-  const editorBtn = document.createElement("button");
-  editorBtn.className = "breadcrumb-shell breadcrumb-editor";
-  editorBtn.draggable = false;
-  editorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>`;
-  editorBtn.disabled = !(session.worktreePath || dir);
-  editorBtn.title = editorBtn.disabled ? "No directory to open" : `Open ${session.worktreePath || dir} in ${editor}`;
-  editorBtn.setAttribute("aria-label", `Open in ${editor}`);
-  editorBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void openInEditor(session.id);
-  });
-  nodes.push(editorBtn);
+  if (editor) {
+    const editorBtn = document.createElement("button");
+    editorBtn.className = "breadcrumb-shell breadcrumb-editor";
+    editorBtn.draggable = false;
+    editorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>`;
+    editorBtn.disabled = !(session.worktreePath || dir);
+    editorBtn.title = editorBtn.disabled ? "No directory to open" : `Open ${session.worktreePath || dir} in ${editor}`;
+    editorBtn.setAttribute("aria-label", `Open in ${editor}`);
+    editorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void openInEditor(session.id);
+    });
+    nodes.push(editorBtn);
+  }
   if (branch) {
     const branchEl = document.createElement("span");
     branchEl.className = "breadcrumb-branch";
@@ -4871,6 +4874,7 @@ const settingsEditorCommandGroup = document.getElementById("settings-editor-comm
 if (settingsEditor) {
   for (const preset of EDITOR_PRESETS) settingsEditor.add(new Option(preset.name, preset.id));
   settingsEditor.add(new Option("Custom…", CUSTOM_EDITOR_ID));
+  settingsEditor.add(new Option("None (hide button)", NO_EDITOR_ID));
   settingsEditor.addEventListener("change", syncEditorCommandField);
 }
 
@@ -4905,7 +4909,8 @@ function populateSettingsForm() {
   settingsFontSize.value = terminalSettings.fontSize.toString();
   settingsCursorBlink.checked = terminalSettings.cursorBlink;
   settingsWorktreeDir.value = terminalSettings.worktreeDir;
-  const known = terminalSettings.editor === CUSTOM_EDITOR_ID || EDITOR_PRESETS.some(p => p.id === terminalSettings.editor);
+  const known = [CUSTOM_EDITOR_ID, NO_EDITOR_ID].includes(terminalSettings.editor)
+    || EDITOR_PRESETS.some(p => p.id === terminalSettings.editor);
   settingsEditor.value = known ? terminalSettings.editor : DEFAULT_EDITOR_ID;
   settingsEditorCommand.value = terminalSettings.editorCommand;
   syncEditorCommandField();

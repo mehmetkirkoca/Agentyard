@@ -1,4 +1,4 @@
-import {buildEditorLaunch, EDITOR_PRESETS, editorEnv, editorName, parseCommand} from "./editor-launch";
+import {buildEditorLaunch, EDITOR_PRESETS, editorEnv, editorName, NO_EDITOR_ID, parseCommand} from "./editor-launch";
 
 const only = (...paths: string[]) => (p: string) => paths.includes(p);
 const base = {dir: "/work/my app", pathEnv: "/usr/bin:/home/u/bin", platform: "linux", home: "/home/u", customCommand: ""};
@@ -66,6 +66,14 @@ describe("buildEditorLaunch: custom", () => {
   it("reports an empty command and a missing program", () => {
     expect(custom("   ")).toEqual({ok: false, error: "Set a custom editor command in Settings"});
     expect(custom("nvim-qt {dir}")).toEqual({ok: false, error: "nvim-qt was not found"});
+  });
+});
+
+describe("buildEditorLaunch: turned off", () => {
+  it("opens nothing when the button is turned off in Settings", () => {
+    expect(NO_EDITOR_ID).toBe("none");
+    expect(buildEditorLaunch({...base, editorId: NO_EDITOR_ID, exists: only("/usr/bin/code")}))
+      .toEqual({ok: false, error: "The editor button is turned off in Settings"});
   });
 });
 
