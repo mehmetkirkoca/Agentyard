@@ -51,6 +51,8 @@ export interface PersistedSession {
   agentConversationId?: string;
   /** Antigravity fork: how many prompts the original (forkedFrom) had when forked */
   forkedPromptCount?: number;
+  /** Listed under the group's "Archive" until unarchived by hand, even while it runs */
+  archived?: boolean;
 }
 
 export interface SessionRuntime {

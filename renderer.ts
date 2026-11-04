@@ -339,6 +339,7 @@ class PersistedFlags extends Map<string, boolean> {
 
 const collapsedProjects = new PersistedFlags("collapsedGroups"); // true = collapsed (default expanded)
 const olderExpanded = new PersistedFlags("olderExpanded"); // true = expanded (default collapsed)
+const archiveExpanded = new PersistedFlags("archiveExpanded"); // true = expanded (default collapsed)
 const OTHER_PROJECT_ID = "__other__";
 
 // Project order in the PROJECTS section (drag & drop), remembered per viewer; OTHERS is a
@@ -1099,6 +1100,9 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
   const forkMenuItem = canFork(config)
     ? `<button class="session-menu-item fork-session-btn" data-id="${sessionId}">Fork</button>`
     : '';
+  const archiveMenuItem = sess
+    ? `<button class="session-menu-item archive-session-btn" data-id="${sessionId}">${sess.meta.archived ? "Unarchive" : "Archive"}</button>`
+    : '';
   const safeName = escapeHtml(name);
 
   const item = document.createElement("div");
@@ -1120,6 +1124,7 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
         ${moveMenuItem}
         ${skipMenuItem}
         ${applyMenuItem}
+        ${archiveMenuItem}
         <button class="session-menu-item delete-session-btn" data-id="${sessionId}">Delete</button>
       </div>
     </div>
@@ -1205,6 +1210,13 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
     deleteSession(sessionId);
   });
 
+  const archiveBtn = item.querySelector(".archive-session-btn");
+  archiveBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu?.classList.add("hidden");
+    void setSessionArchived(sessionId);
+  });
+
   // Apply to project button (only for worktree sessions)
   const applyBtn = item.querySelector(".apply-to-project-btn");
   applyBtn?.addEventListener("click", (e) => {
@@ -1233,6 +1245,25 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
   // The sidebar is rebuilt in detached groups, so the row cannot be found by id yet
   refreshSessionIndicator(sessionId, item);
   if (sessionId === activeSessionId) item.classList.add("active");
+}
+
+// Archive or unarchive by the session's current state; its tab and agent are left alone
+async function setSessionArchived(sessionId: string) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const archived = !session.meta.archived;
+  try {
+    const result = await ipcRenderer.invoke("set-session-archived", sessionId, archived) as {ok: boolean; error?: string};
+    if (!result.ok) {
+      showToast(result.error ?? "Archiving failed", "error");
+      return;
+    }
+    session.meta = {...session.meta, archived: archived || undefined};
+    renderSidebar();
+  } catch (error) {
+    console.error(`set-session-archived failed for session ${sessionId}:`, error);
+    showToast("Archiving failed", "error");
+  }
 }
 
 function renderGroupSessions(container: HTMLElement, list: PersistedSession[]) {
@@ -1297,7 +1328,25 @@ function restoreSearchFocus() {
   input.setSelectionRange(searchFocus.start, searchFocus.end);
 }
 
-// Recent sessions plus the collapsible "Older (n)" block of one sidebar group.
+// A collapsible "<label> (n)" block of a sidebar group; nothing when the list is empty
+function renderCollapsibleBlock(body: HTMLElement, label: string, expanded: PersistedFlags, pid: string, list: PersistedSession[]) {
+  if (list.length === 0) return;
+  const open = expanded.get(pid) === true;
+  const header = document.createElement("div");
+  header.className = "older-header";
+  const chevron = document.createElement("span");
+  chevron.className = "section-chevron";
+  chevron.textContent = open ? "▾" : "▸";
+  header.append(chevron, `${label} (${list.length})`);
+  header.addEventListener("click", () => {
+    expanded.set(pid, !open);
+    renderSidebar();
+  });
+  body.appendChild(header);
+  if (open) renderGroupSessions(body, list);
+}
+
+// Recent sessions plus the collapsible "Older (n)" and "Archive (n)" blocks of one sidebar group.
 function renderGroupBody(group: SidebarGroup): HTMLElement {
   const pid = group.project.id;
   const query = groupSearch.get(pid) ?? "";
@@ -1311,21 +1360,8 @@ function renderGroupBody(group: SidebarGroup): HTMLElement {
     body.appendChild(empty);
   }
   renderGroupSessions(body, g.recent);
-  if (g.older.length > 0) {
-    const open = olderExpanded.get(pid) === true;
-    const olderHeader = document.createElement("div");
-    olderHeader.className = "older-header";
-    const olderChevron = document.createElement("span");
-    olderChevron.className = "section-chevron";
-    olderChevron.textContent = open ? "▾" : "▸";
-    olderHeader.append(olderChevron, `Older (${g.older.length})`);
-    olderHeader.addEventListener("click", () => {
-      olderExpanded.set(pid, !open);
-      renderSidebar();
-    });
-    body.appendChild(olderHeader);
-    if (open) renderGroupSessions(body, g.older);
-  }
+  renderCollapsibleBlock(body, "Older", olderExpanded, pid, g.older);
+  renderCollapsibleBlock(body, "Archive", archiveExpanded, pid, g.archived);
   return body;
 }
 
@@ -1437,7 +1473,7 @@ function renderSidebarNow(list: HTMLElement) {
   }
   const now = Date.now();
   const groups = buildSidebar(allProjects, allMetas, now, 7, loadProjectOrder()).filter(
-    g => (g.project.id !== OTHER_PROJECT_ID && !workspaceState.sidebarFilter) || g.recent.length + g.older.length > 0,
+    g => (g.project.id !== OTHER_PROJECT_ID && !workspaceState.sidebarFilter) || g.recent.length + g.older.length + g.archived.length > 0,
   );
   const orderedIds = groups.map(g => g.project.id).filter(id => id !== OTHER_PROJECT_ID);
 

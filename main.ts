@@ -1758,6 +1758,21 @@ ipcMain.handle("set-session-dir", async (_event, sessionId: string, dir: string,
 });
 
 // Takes effect on the next launch of the session.
+// Only the sidebar's listing changes: a running session keeps running
+ipcMain.handle("set-session-archived", (_event, sessionId: string, archived: boolean): {ok: true} | {ok: false; error: string} => {
+  try {
+    const sessions = getPersistedSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
+    if (archived) session.archived = true;
+    else delete session.archived;
+    savePersistedSessions(sessions);
+    return {ok: true};
+  } catch (error) {
+    return {ok: false, error: `Archiving session ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`};
+  }
+});
+
 ipcMain.handle("set-skip-permissions", (_event, sessionId: string, value: boolean): void => {
   try {
     const sessions = getPersistedSessions();

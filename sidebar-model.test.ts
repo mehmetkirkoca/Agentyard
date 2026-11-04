@@ -102,6 +102,7 @@ describe("filterSidebarGroup", () => {
     waitingCount: 1,
     recent: [s("a", { name: "BİLGİ ekranı" }), s("b", { name: "Release check" })],
     older: [s("c", { name: "İndirim kuralları" }), s("d", { name: "Cluster feature" })],
+    archived: [],
   };
 
   it("returns the group unchanged for an empty or blank query", () => {
@@ -118,7 +119,7 @@ describe("filterSidebarGroup", () => {
   });
 
   it("keeps the waiting counter of the whole group", () => {
-    expect(filterSidebarGroup(group, "zzz")).toEqual({ ...group, recent: [], older: [] });
+    expect(filterSidebarGroup(group, "zzz")).toEqual({ ...group, recent: [], older: [], archived: [] });
   });
 });
 
@@ -139,5 +140,49 @@ describe("project order", () => {
     expect(moveProjectInOrder(["a", "b", "c"], "c", "a", false)).toEqual(["c", "a", "b"]);
     expect(moveProjectInOrder(["a", "b", "c"], "a", "c", true)).toEqual(["b", "c", "a"]);
     expect(moveProjectInOrder(["a", "b", "c"], "b", "b", false)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("archived sessions", () => {
+  const recent = {lastActivity: NOW - DAY, status: SessionStatus.IDLE};
+
+  it("lists them apart from recent and older, sorted by activity", () => {
+    const sessions = [
+      s("a1", {archived: true, lastActivity: NOW - 20 * DAY, status: SessionStatus.IDLE}),
+      s("a2", {archived: true, ...recent}),
+      s("new", recent),
+      s("old", {lastActivity: NOW - 8 * DAY, status: SessionStatus.IDLE}),
+    ];
+    const [group] = buildSidebar([project], sessions, NOW);
+    expect(group.recent.map(x => x.id)).toEqual(["new"]);
+    expect(group.older.map(x => x.id)).toEqual(["old"]);
+    expect(group.archived.map(x => x.id)).toEqual(["a2", "a1"]);
+  });
+
+  it("stay archived while running", () => {
+    const [group] = buildSidebar([project], [s("a", {archived: true, status: SessionStatus.RUNNING})], NOW);
+    expect(group.recent).toEqual([]);
+    expect(group.archived.map(x => x.id)).toEqual(["a"]);
+  });
+
+  it("count as waiting only while really waiting, not when done", () => {
+    const [waiting] = buildSidebar([project], [s("a", {archived: true, status: SessionStatus.WAITING})], NOW);
+    const [done] = buildSidebar([project], [s("a", {archived: true, status: SessionStatus.DONE})], NOW);
+    expect(waiting.waitingCount).toBe(1);
+    expect(done.waitingCount).toBe(0);
+  });
+
+  it("are found by the search and listed inline", () => {
+    const sessions = [s("match", {archived: true, ...recent}), s("other", {archived: true, ...recent})];
+    const [group] = buildSidebar([project], sessions, NOW);
+    const found = filterSidebarGroup(group, "mat");
+    expect(found.recent.map(x => x.id)).toEqual(["match"]);
+    expect(found.archived).toEqual([]);
+  });
+
+  it("appear in the standalone group too", () => {
+    const standalone: Project = {id: STANDALONE_PROJECT_ID, name: "Sessions", dirs: []};
+    const group = buildStandaloneGroup([standalone], [s("a", {archived: true, projectId: STANDALONE_PROJECT_ID})], NOW);
+    expect(group?.archived.map(x => x.id)).toEqual(["a"]);
   });
 });

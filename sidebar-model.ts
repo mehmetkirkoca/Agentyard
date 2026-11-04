@@ -6,6 +6,7 @@ export interface SidebarGroup {
   waitingCount: number;
   recent: PersistedSession[];
   older: PersistedSession[];
+  archived: PersistedSession[];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -31,11 +32,14 @@ function buildGroup(
     now - activity(s) > staleDays * DAY_MS &&
     s.status !== SessionStatus.RUNNING &&
     !isAttention(s.status);
+  const listed = own.filter(s => !s.archived);
   return {
     project,
-    waitingCount: own.filter(s => isAttention(s.status)).length,
-    recent: own.filter(s => !isOlder(s)),
-    older: own.filter(isOlder),
+    // An archived session counts only while it really waits: "done" would never clear there
+    waitingCount: own.filter(s => (s.archived ? s.status === SessionStatus.WAITING : isAttention(s.status))).length,
+    recent: listed.filter(s => !isOlder(s)),
+    older: listed.filter(isOlder),
+    archived: own.filter(s => s.archived),
   };
 }
 
@@ -85,12 +89,12 @@ function searchKey(text: string): string {
 
 /**
  * Sidebar search inside one group: keep sessions whose name contains the query
- * (case-insensitive, Turkish casing). Matches from "Older" are listed inline so
+ * (case-insensitive, Turkish casing). Matches from "Older" and "Archive" are listed inline so
  * they are visible without expanding it. The waiting counter stays the group's.
  */
 export function filterSidebarGroup(group: SidebarGroup, query: string): SidebarGroup {
   const q = searchKey(query.trim());
   if (!q) return group;
   const matches = (session: PersistedSession) => searchKey(session.name).includes(q);
-  return {...group, recent: [...group.recent, ...group.older].filter(matches), older: []};
+  return {...group, recent: [...group.recent, ...group.older, ...group.archived].filter(matches), older: [], archived: []};
 }
