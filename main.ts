@@ -9,7 +9,7 @@ import {simpleGit} from "simple-git";
 import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
-import {buildClaudeCommand, buildHookSettings, buildPtyEnv} from "./claude-launch";
+import {buildClaudeCommand, buildHookSettings, buildPtyEnv, claudeScrollEnv} from "./claude-launch";
 import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
 import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agySessionName, buildAgyCommand, createAgyWaitingDetector, ensureAgySnapBridge, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
 import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity-screen";
@@ -565,7 +565,8 @@ function resolveNodeBinPath(home: string = os.homedir()): string | undefined {
 }
 
 function getPtyEnv(sessionId: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env = {...buildPtyEnv(process.env, sessionId), ...extra};
+  const settings = (store as any).get("terminalSettings") ?? {};
+  const env = {...buildPtyEnv(process.env, sessionId), ...claudeScrollEnv(settings.scrollSpeed), ...extra};
   delete env.npm_config_prefix;
   delete env.NPM_CONFIG_PREFIX;
   const nodeBin = resolveNodeBinPath();
@@ -778,7 +779,8 @@ function spawnSessionPty(
             try {
               fs.mkdirSync(path.dirname(hookPath), {recursive: true});
               resetStatusFile(sessionUuid);
-              fs.writeFileSync(hookPath, JSON.stringify(buildHookSettings(statusFile), null, 2));
+              const disableFullscreen = (store as any).get("terminalSettings")?.disableClaudeFullscreen === true;
+              fs.writeFileSync(hookPath, JSON.stringify(buildHookSettings(statusFile, {disableFullscreen}), null, 2));
               settingsPath = hookPath;
             } catch (error) {
               console.error(`Error writing hook settings file ${hookPath}:`, error);

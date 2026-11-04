@@ -36,10 +36,19 @@ export function buildHookCommand(statusFile: string): string {
   return `printf '{%s}\\n' "$(${fields})" >> '${statusFile}'`;
 }
 
-export function buildHookSettings(statusFile: string): object {
+// Claude's wheel speed in fullscreen (xterm's own sensitivity does not reach it: there every wheel
+// event goes to Claude as one report). 0 = Default: Claude's or the user's own value stays.
+export function claudeScrollEnv(level: unknown): NodeJS.ProcessEnv {
+  const valid = typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 20;
+  return valid ? {CLAUDE_CODE_SCROLL_SPEED: String(level)} : {};
+}
+
+export function buildHookSettings(statusFile: string, opts: {disableFullscreen?: boolean} = {}): object {
   const command = buildHookCommand(statusFile);
   const hooks = [{type: "command", command}];
   return {
+    // Overrides "tui": "fullscreen" of the user's settings: the normal screen has scrollback
+    ...(opts.disableFullscreen ? {tui: "default"} : {}),
     hooks: {
       UserPromptSubmit: [{hooks}],
       PostToolUse: [{matcher: "*", hooks}],

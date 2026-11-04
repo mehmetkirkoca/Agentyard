@@ -2,7 +2,7 @@ import {execFileSync} from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import {buildClaudeCommand, buildHookCommand, buildHookSettings, buildPtyEnv, INHERITED_CLAUDE_ENV_KEYS} from "./claude-launch";
+import {buildClaudeCommand, buildHookCommand, buildHookSettings, buildPtyEnv, claudeScrollEnv, INHERITED_CLAUDE_ENV_KEYS} from "./claude-launch";
 import {parseHookEvents} from "./session-status";
 
 describe("buildPtyEnv", () => {
@@ -105,5 +105,27 @@ describe("buildHookCommand", () => {
     run("not json");
     expect(fs.readFileSync(statusFile, "utf8")).toBe("{}\n");
     expect(parseHookEvents("{}\n")).toEqual([]);
+  });
+});
+
+describe("buildHookSettings: fullscreen", () => {
+  it("leaves the user's own tui setting alone by default", () => {
+    expect(buildHookSettings("/st/u.jsonl")).not.toHaveProperty("tui");
+    expect(buildHookSettings("/st/u.jsonl", {disableFullscreen: false})).not.toHaveProperty("tui");
+  });
+
+  it("overrides it with the normal renderer when fullscreen is turned off", () => {
+    expect(buildHookSettings("/st/u.jsonl", {disableFullscreen: true})).toMatchObject({tui: "default"});
+  });
+});
+
+describe("claudeScrollEnv", () => {
+  it("sets Claude's wheel speed for a chosen level", () => {
+    expect(claudeScrollEnv(3)).toEqual({CLAUDE_CODE_SCROLL_SPEED: "3"});
+    expect(claudeScrollEnv(20)).toEqual({CLAUDE_CODE_SCROLL_SPEED: "20"});
+  });
+
+  it("sets nothing for Default or a value Claude would not accept", () => {
+    for (const level of [0, -1, 21, 1.5, NaN, undefined, "3", null]) expect(claudeScrollEnv(level)).toEqual({});
   });
 });

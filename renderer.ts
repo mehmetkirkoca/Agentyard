@@ -105,6 +105,8 @@ interface TerminalSettings {
   worktreeDir: string;
   editor: string; // EDITOR_PRESETS id, "custom" or "none" (no button)
   editorCommand: string; // custom editor: program and arguments, {dir} = the session's directory
+  scrollSpeed: number; // mouse wheel level, 0 = Default
+  disableClaudeFullscreen: boolean; // Claude on the normal screen (real scrollback and scrollbar)
 }
 
 interface ThemeColors {
@@ -303,6 +305,8 @@ const DEFAULT_SETTINGS: TerminalSettings = {
   worktreeDir: require("path").join(require("os").homedir(), "worktrees"),
   editor: DEFAULT_EDITOR_ID,
   editorCommand: "",
+  scrollSpeed: 0,
+  disableClaudeFullscreen: false,
 };
 
 const sessions = new Map<string, Session>();
@@ -691,6 +695,7 @@ function terminalOptions() {
     fontSize: terminalSettings.fontSize,
     fontFamily: terminalSettings.fontFamily,
     theme: THEME_PRESETS[terminalSettings.theme] || THEME_PRESETS["macos-dark"],
+    scrollSensitivity: terminalSettings.scrollSpeed || 1,
   };
 }
 
@@ -872,6 +877,7 @@ function createTerminalUI(sessionId: string) {
     fontSize: terminalSettings.fontSize,
     fontFamily: terminalSettings.fontFamily,
     theme: themeColors,
+    scrollSensitivity: terminalSettings.scrollSpeed || 1,
   });
 
   const fitAddon = new FitAddon();
@@ -4905,6 +4911,8 @@ const settingsFontFamily = document.getElementById("settings-font-family") as HT
 const settingsFontSize = document.getElementById("settings-font-size") as HTMLInputElement;
 const settingsCursorBlink = document.getElementById("settings-cursor-blink") as HTMLInputElement;
 const settingsWorktreeDir = document.getElementById("settings-worktree-dir") as HTMLInputElement;
+const settingsScrollSpeed = document.getElementById("settings-scroll-speed") as HTMLSelectElement;
+const settingsDisableFullscreen = document.getElementById("settings-disable-fullscreen") as HTMLInputElement;
 const settingsEditor = document.getElementById("settings-editor") as HTMLSelectElement;
 const settingsEditorCommand = document.getElementById("settings-editor-command") as HTMLInputElement;
 const settingsEditorCommandGroup = document.getElementById("settings-editor-command-group");
@@ -4948,6 +4956,9 @@ function populateSettingsForm() {
   settingsFontSize.value = terminalSettings.fontSize.toString();
   settingsCursorBlink.checked = terminalSettings.cursorBlink;
   settingsWorktreeDir.value = terminalSettings.worktreeDir;
+  settingsScrollSpeed.value = String(terminalSettings.scrollSpeed);
+  if (settingsScrollSpeed.selectedIndex === -1) settingsScrollSpeed.value = "0";
+  settingsDisableFullscreen.checked = terminalSettings.disableClaudeFullscreen;
   const known = [CUSTOM_EDITOR_ID, NO_EDITOR_ID].includes(terminalSettings.editor)
     || EDITOR_PRESETS.some(p => p.id === terminalSettings.editor);
   settingsEditor.value = known ? terminalSettings.editor : DEFAULT_EDITOR_ID;
@@ -4965,6 +4976,7 @@ function applySettingsToAllTerminals() {
       session.terminal.options.fontSize = terminalSettings.fontSize;
       session.terminal.options.cursorBlink = terminalSettings.cursorBlink;
       session.terminal.options.theme = themeColors;
+      session.terminal.options.scrollSensitivity = terminalSettings.scrollSpeed || 1;
 
       // Refresh terminal to apply changes
       if (session.fitAddon) {
@@ -5017,6 +5029,8 @@ saveSettingsBtn?.addEventListener("click", async () => {
   terminalSettings.fontSize = parseInt(settingsFontSize.value) || DEFAULT_SETTINGS.fontSize;
   terminalSettings.cursorBlink = settingsCursorBlink.checked;
   terminalSettings.worktreeDir = settingsWorktreeDir.value || DEFAULT_SETTINGS.worktreeDir;
+  terminalSettings.scrollSpeed = Number(settingsScrollSpeed.value) || 0;
+  terminalSettings.disableClaudeFullscreen = settingsDisableFullscreen.checked;
   terminalSettings.editor = settingsEditor.value || DEFAULT_EDITOR_ID;
   terminalSettings.editorCommand = settingsEditorCommand.value.trim();
 

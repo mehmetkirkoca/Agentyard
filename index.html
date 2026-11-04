@@ -333,6 +333,28 @@
         </div>
 
         <div class="form-group">
+          <label class="form-label">Mouse Scroll Speed</label>
+          <select id="settings-scroll-speed" class="form-select">
+            <option value="0">Default</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="20">20</option>
+          </select>
+          <span class="text-xs text-gray-400 mt-1 block">Lines per wheel step. Claude Code in fullscreen picks it up when a session is opened</span>
+        </div>
+
+        <div class="form-group">
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="settings-disable-fullscreen" class="form-checkbox" />
+            <span class="text-sm text-gray-300">Turn off Claude Code fullscreen</span>
+          </label>
+          <span class="text-xs text-gray-400 mt-1 block">Runs Claude Code on the normal screen, with the terminal's scrollbar. Applies when a session is opened</span>
+        </div>
+
+        <div class="form-group">
           <label class="form-label">Worktree Root Directory</label>
           <div class="directory-input-group">
             <input type="text" id="settings-worktree-dir" class="form-input" readonly placeholder="~/worktrees" />
