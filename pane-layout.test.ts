@@ -26,6 +26,7 @@ import {
   setLinkedSplits,
   setRatio,
   shellRatioAt,
+  isRepeatClick,
   showSession,
   splitPane,
   splitterSpecs,
@@ -460,5 +461,19 @@ describe("side shell panel", () => {
     expect(shellRatioAt(100, 464, 540)).toBe(0.15);
     expect(shellRatioAt(100, 464, 0)).toBe(0.85);
     expect(shellRatioAt(100, 64, 100)).toBe(0.35);
+  });
+});
+
+describe("isRepeatClick", () => {
+  // Closing or splitting a pane moves another pane's same button under the pointer: the second
+  // click of a double click would close or split that one too
+  it("lets a single click through and drops the repeats of a quick multi-click", () => {
+    expect(isRepeatClick(1)).toBe(false);
+    expect(isRepeatClick(2)).toBe(true);
+    expect(isRepeatClick(3)).toBe(true);
+  });
+
+  it("lets a click without a count (keyboard or synthetic) through", () => {
+    expect(isRepeatClick(0)).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ import {
   canSplit,
   clampShellRatio,
   closePane,
+  isRepeatClick,
   createPaneState,
   crossHandle,
   dropZone,
@@ -2603,6 +2604,8 @@ function createPaneHeader(pane: HTMLElement, leafId: number): HTMLElement {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const action = btn.dataset.action;
+      // × and split move another pane's same button under the pointer; a double click must not hit it
+      if (action !== "pin" && isRepeatClick(e.detail)) return;
       if (action === "close") closePaneAt(leafId);
       else if (action === "pin") togglePinAt(leafId);
       else splitPaneWith(leafId, action === "right" ? "right" : "bottom", null);

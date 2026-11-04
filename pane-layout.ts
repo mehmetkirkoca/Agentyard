@@ -63,6 +63,12 @@ export function shellRatioAt(paneTop: number, paneHeight: number, clientY: numbe
   return clampShellRatio((areaBottom - clientY) / area);
 }
 
+// Second and later clicks of a quick multi-click (MouseEvent.detail). Closing or splitting a pane
+// moves another pane's same button under the pointer, so a double click would hit that one too.
+export function isRepeatClick(detail: number): boolean {
+  return detail > 1;
+}
+
 function leaf(id: number, session: string | null = null): LeafNode {
   return {kind: "leaf", id, session};
 }
