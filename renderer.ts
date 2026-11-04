@@ -5,7 +5,7 @@ import {buildPathPaste} from "./attach-utils";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
-import {isClaudeSessionReady, isCopyKey} from "./terminal-utils";
+import {isClaudeSessionReady, isCopyKey, resyncViewport} from "./terminal-utils";
 import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-launch";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
@@ -819,9 +819,11 @@ function renderSideShells(shown: Set<string>) {
     pane.classList.toggle("shell-open", open);
     pane.style.setProperty("--shell-ratio", String(shellRatio));
     if (!open || !shell) return;
-    if (shell.panel.parentElement !== pane) pane.appendChild(shell.panel);
+    const moved = shell.panel.parentElement !== pane;
+    if (moved) pane.appendChild(shell.panel);
     // First time on screen: open now so xterm measures a real cell size
     if (!shell.terminal.element) shell.terminal.open(shell.host);
+    else if (moved) resyncViewport(shell.terminal);
   });
 }
 
@@ -3458,10 +3460,12 @@ function renderPanes() {
     const session = leafNode.session ? sessions.get(leafNode.session) : undefined;
     const element = session?.element;
     if (element) {
-      if (element.parentElement !== pane) pane.appendChild(element);
+      const moved = element.parentElement !== pane;
+      if (moved) pane.appendChild(element);
       element.classList.add("active");
       // First time on screen: open now so xterm measures a real cell size
       if (session?.terminal && !session.terminal.element) session.terminal.open(element);
+      else if (moved && session?.terminal) resyncViewport(session.terminal);
     }
     const header = pane.querySelector(".pane-header") as HTMLElement;
     header.draggable = treeLeaves.length > 1;

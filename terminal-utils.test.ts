@@ -1,4 +1,4 @@
-import {isCopyKey} from "./terminal-utils";
+import {isCopyKey, resyncViewport} from "./terminal-utils";
 
 const key = (code: string, mods: {ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean} = {}, type = "keydown") => ({
   type,
@@ -29,5 +29,24 @@ describe("isCopyKey", () => {
     expect(isCopyKey(key("KeyC"), true)).toBe(false);
     expect(isCopyKey(key("KeyC", {ctrl: true, alt: true}), true)).toBe(false);
     expect(isCopyKey(key("KeyC", {ctrl: true}, "keyup"), true)).toBe(false);
+  });
+});
+
+describe("resyncViewport", () => {
+  const fake = (viewportY: number) => {
+    const calls: number[] = [];
+    return {calls, term: {buffer: {active: {viewportY}}, scrollLines: (n: number) => { calls.push(n); }}};
+  };
+
+  it("scrolls away and back, so xterm writes the DOM scroll position again at the same line", () => {
+    const {calls, term} = fake(385);
+    resyncViewport(term);
+    expect(calls).toEqual([-1, 1]);
+  });
+
+  it("does nothing at the top: the browser's reset position is already right there", () => {
+    const {calls, term} = fake(0);
+    resyncViewport(term);
+    expect(calls).toEqual([]);
   });
 });
