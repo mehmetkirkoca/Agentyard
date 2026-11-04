@@ -70,6 +70,10 @@ body {
 
 /* Terminals: always visible. xterm's text layer covers the viewport, so hovering the text never
    counts as hovering the viewport and the rule above would show the thumb only on the strip itself */
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 12px;
+}
+
 .xterm .xterm-viewport::-webkit-scrollbar-thumb {
   background-color: var(--vsc-scrollbar);
 }
@@ -1405,8 +1409,7 @@ body {
   }
 
   .pane-splitter.splitter-x {
-    width: 4px;
-    transform: translateX(-50%);
+    width: 4px; /* right of the border, on the next pane's padding: the left pane's scrollbar stays free */
     cursor: col-resize;
   }
 
@@ -1462,8 +1465,13 @@ body {
 
   .session-wrapper {
     @apply absolute inset-0 hidden;
-    padding: 4px 0 0 8px;
     background-color: var(--vsc-bg);
+  }
+
+  /* On .xterm, not the wrapper: FitAddon subtracts only this element's padding, so padding on the
+     wrapper made the terminal 8px too wide and its text layer covered the scrollbar */
+  .session-wrapper > .xterm {
+    padding: 4px 0 0 8px;
   }
 
   .session-wrapper.active {
