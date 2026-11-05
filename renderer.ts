@@ -311,6 +311,7 @@ const DEFAULT_SETTINGS: TerminalSettings = {
 
 const sessions = new Map<string, Session>();
 let activeSessionId: string | null = null;
+let sessionModalId: string | null = null;
 let projects: Project[] = [];
 let runtime: Record<string, SessionRuntime> = {};
 let syncWarnings: string[] = [];
@@ -2539,6 +2540,7 @@ function isFileDrag(e: DragEvent): boolean {
 
 // Visible in any pane counts as seen for the tab unread/activity marks
 function isShownInPane(sessionId: string): boolean {
+  if (sessionId === sessionModalId) return true;
   return visibleSessions(paneState).includes(sessionId) && !!sessions.get(sessionId)?.element;
 }
 
@@ -3448,9 +3450,14 @@ function renderPanes() {
   const treeLeaves = leaves(paneState.root);
   const leafIds = new Set(treeLeaves.map(l => l.id));
 
+  // The modal's session got a pane, or it was closed or deleted
+  if (sessionModalId && (shown.has(sessionModalId) || !sessions.get(sessionModalId)?.element)) {
+    dismissSessionModal();
+  }
+
   // Hidden terminals wait outside the grid; panes that left the tree hand theirs back first
   sessions.forEach((session, id) => {
-    if (!session.element || shown.has(id)) return;
+    if (!session.element || shown.has(id) || id === sessionModalId) return;
     session.element.classList.remove("active");
     if (session.element.parentElement !== container) container.appendChild(session.element);
   });
@@ -3520,7 +3527,8 @@ function toggleLinkedSplits() {
 }
 
 function refitVisibleTerminals() {
-  for (const id of visibleSessions(paneState)) {
+  const visible = visibleSessions(paneState);
+  for (const id of sessionModalId ? [...visible, sessionModalId] : visible) {
     const session = sessions.get(id);
     if (!session?.fitAddon || !session.element?.isConnected) continue;
     const proposedDimensions = session.fitAddon.proposeDimensions();
@@ -3786,13 +3794,64 @@ function switchToSession(sessionId: string) {
   enterSessionWorkspace(sessionId);
   const next = showSession(paneState, sessionId);
   if (paneOfSession(next, sessionId) === null) {
-    warnAllPinned();
+    openSessionModal(sessionId);
     return;
   }
   commitPanes(next);
   syncActiveSession(true);
   stickyPrompts.get(sessionId)?.refreshPrompts();
 }
+
+// Every pane is pinned: the session's live terminal opens in a modal instead of a pane
+function openSessionModal(sessionId: string) {
+  const session = sessions.get(sessionId);
+  const overlay = document.getElementById("session-modal");
+  const body = document.getElementById("session-modal-body");
+  if (!session?.element || !session.terminal || !overlay || !body) return;
+  if (sessionModalId !== sessionId) closeSessionModal();
+  sessionModalId = sessionId;
+  const title = document.getElementById("session-modal-title");
+  if (title) title.textContent = session.name;
+  // Visible before term.open(), so xterm measures a real cell size
+  overlay.classList.remove("hidden");
+  const moved = session.element.parentElement !== body;
+  if (moved) body.appendChild(session.element);
+  session.element.classList.add("active");
+  if (!session.terminal.element) session.terminal.open(session.element);
+  else if (moved) resyncViewport(session.terminal);
+  window.dispatchEvent(new Event("resize"));
+
+  ipcRenderer.send("session-viewed", sessionId);
+  if (hasHookStatus(session.config)) {
+    applyTabStatus(sessionId);
+  } else {
+    clearUnreadStatus(sessionId);
+    clearActivityStatus(sessionId);
+  }
+  session.terminal.focus();
+  stickyPrompts.get(sessionId)?.refreshPrompts();
+}
+
+// The terminal itself goes back on the next renderPanes
+function dismissSessionModal() {
+  sessionModalId = null;
+  document.getElementById("session-modal")?.classList.add("hidden");
+  ipcRenderer.send("session-viewed", activeSessionId);
+}
+
+function closeSessionModal() {
+  if (sessionModalId === null) return;
+  dismissSessionModal();
+  renderPanes();
+  if (activeSessionId) sessions.get(activeSessionId)?.terminal?.focus();
+}
+
+document.getElementById("session-modal-close")?.addEventListener("click", closeSessionModal);
+// mousedown, not click: a text selection released outside the terminal also clicks the overlay.
+// Escape stays with the terminal, where agents use it.
+document.getElementById("session-modal")?.addEventListener("mousedown", (e) => {
+  if (e.target === e.currentTarget) closeSessionModal();
+});
 
 function closeSession(sessionId: string) {
   const session = sessions.get(sessionId);

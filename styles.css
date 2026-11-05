@@ -1516,6 +1516,44 @@ body {
     color: var(--vsc-fg-strong);
   }
 
+  .session-modal {
+    @apply flex flex-col overflow-hidden;
+    width: 90vw;
+    max-width: 1100px;
+    height: 80vh;
+    padding: 0;
+  }
+
+  .session-modal-header {
+    @apply flex flex-none items-center justify-between;
+    padding: 6px 8px 6px 12px;
+    border-bottom: 1px solid var(--vsc-border-strong);
+  }
+
+  .session-modal-header .modal-title {
+    margin-bottom: 0;
+  }
+
+  .session-modal-close {
+    @apply flex-none;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--vsc-fg-muted);
+  }
+
+  .session-modal-close:hover {
+    background-color: var(--vsc-border-strong);
+    color: var(--vsc-fg-strong);
+  }
+
+  .session-modal-body {
+    @apply relative flex-1;
+    min-height: 0;
+  }
+
   .form-group {
     margin-bottom: 12px;
   }
