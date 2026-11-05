@@ -1366,6 +1366,7 @@ function renderGroupSessions(container: HTMLElement, list: PersistedSession[]) {
 // box that had focus, so it can be focused again after the sidebar is rebuilt.
 const groupSearch = new Map<string, string>();
 let searchFocus: {pid: string; start: number; end: number} | null = null;
+const PENCIL_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 const SEARCH_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
 
 function toggleGroupSearch(pid: string) {
@@ -1580,12 +1581,7 @@ function renderSidebarNow(list: HTMLElement) {
     header.innerHTML = `
       <span class="project-title truncate"><span class="section-chevron">${collapsed ? "▸" : "▾"}</span>${escapeHtml(g.project.name)}${waiting}</span>
       <button class="group-search-btn${groupSearch.has(pid) ? " active" : ""}" title="Search sessions" aria-label="Search sessions">${SEARCH_ICON}</button>
-      <div class="relative">
-        <button class="session-menu-btn project-menu-btn" title="Project options">⋯</button>
-        <div class="session-menu hidden">
-          <button class="session-menu-item edit-project-btn">Edit project</button>
-        </div>
-      </div>
+      <button class="session-menu-btn edit-project-btn" title="Edit project" aria-label="Edit project">${PENCIL_ICON}</button>
       ${pid !== OTHER_PROJECT_ID ? `<button class="section-add-btn project-new-session-btn" title="New Session" aria-label="New Session">+</button>` : ""}
     `;
     header.addEventListener("click", () => {
@@ -1596,21 +1592,12 @@ function renderSidebarNow(list: HTMLElement) {
       e.stopPropagation();
       toggleGroupSearch(pid);
     });
-    const pMenu = header.querySelector(".session-menu") as HTMLElement;
-    header.querySelector(".project-menu-btn")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      document.querySelectorAll(".session-menu").forEach(m => {
-        if (m !== pMenu) m.classList.add("hidden");
-      });
-      pMenu.classList.toggle("hidden");
-    });
     header.querySelector(".project-new-session-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       openNewSessionDialog(pid).catch(error => console.error("Failed to open the new session dialog:", error));
     });
     header.querySelector(".edit-project-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      pMenu.classList.add("hidden");
       openProjectModal(g.project);
     });
     group.appendChild(header);
@@ -4587,18 +4574,8 @@ function closeProjectModal() {
 
 document.getElementById("new-project")?.addEventListener("click", () => openProjectModal());
 
-// SESSIONS section header ⋯ menu
-const standaloneMenu = document.getElementById("standalone-menu");
-document.getElementById("standalone-menu-btn")?.addEventListener("click", (e) => {
-  e.stopPropagation();
-  document.querySelectorAll(".session-menu").forEach(m => {
-    if (m !== standaloneMenu) m.classList.add("hidden");
-  });
-  standaloneMenu?.classList.toggle("hidden");
-});
 document.getElementById("standalone-edit-dirs")?.addEventListener("click", (e) => {
   e.stopPropagation();
-  standaloneMenu?.classList.add("hidden");
   const standalone = projects.find(p => isStandaloneProject(p));
   if (!standalone) {
     showToast("Standalone sessions are not loaded yet", "warning");
