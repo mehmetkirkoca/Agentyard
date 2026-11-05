@@ -134,11 +134,3 @@ export function createAgentyardApi(ipc: IpcLike, webUtils: WebUtilsLike): Agenty
 export function exposeAgentyardApi(bridge: BridgeLike, ipc: IpcLike, webUtils: WebUtilsLike): void {
   bridge.exposeInMainWorld("agentyard", createAgentyardApi(ipc, webUtils));
 }
-
-// contextBridge.exposeInMainWorld throws while contextIsolation is off, so there the api is
-// assigned onto the window directly. Once contextIsolation is on (Task 5), contextBridge is the
-// only path and the fallback can go.
-export function pickBridge(contextIsolated: boolean, contextBridge: BridgeLike, target: Record<string, unknown>): BridgeLike {
-  if (contextIsolated) return contextBridge;
-  return {exposeInMainWorld: (key, api) => { target[key] = api; }};
-}

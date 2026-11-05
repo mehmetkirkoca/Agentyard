@@ -6,6 +6,7 @@ import * as pty from "node-pty";
 import * as os from "os";
 import * as path from "path";
 import {simpleGit} from "simple-git";
+import {pathToFileURL} from "url";
 import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
@@ -18,7 +19,7 @@ import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, stat
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
 import {addWorktree, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
-import {hardenNavigation} from "./window-security";
+import {createTrustedIpc, hardenNavigation} from "./window-security";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
@@ -40,6 +41,10 @@ import {
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 
 const execAsync = promisify(exec);
+
+// The window loads this URL and IPC trusts only this URL; inside a package it points into app.asar
+const INDEX_HTML_URL = pathToFileURL(path.join(app.getAppPath(), "index.html")).href;
+const trustedIpc = createTrustedIpc(ipcMain, INDEX_HTML_URL);
 
 let mainWindow: BrowserWindow;
 const activePtyProcesses = new Map<string, pty.IPty>();
@@ -899,7 +904,7 @@ async function removeGitBranch(projectDir: string, branchName: string) {
 }
 
 // Open directory picker
-ipcMain.handle("select-directory", async () => {
+trustedIpc.handle("select-directory", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openDirectory"],
   });
@@ -912,7 +917,7 @@ ipcMain.handle("select-directory", async () => {
 });
 
 // Pane "+" menu: pick files to insert as paths into a session's prompt
-ipcMain.handle("select-attachment-files", async (): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> => {
+trustedIpc.handle("select-attachment-files", async (): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Attach files",
@@ -931,7 +936,7 @@ ipcMain.handle("select-attachment-files", async (): Promise<{ ok: true; paths: s
 });
 
 // Pane "+" menu: save the clipboard image as a PNG under ~/agentyard-scratch/attachments/<sessionUuid>/
-ipcMain.handle("save-clipboard-image", (_event, sessionId: string): { ok: true; path: string } | { ok: false; error: string; empty?: boolean } => {
+trustedIpc.handle("save-clipboard-image", (_event, sessionId: string): { ok: true; path: string } | { ok: false; error: string; empty?: boolean } => {
   try {
     const session = getPersistedSessions().find(s => s.id === sessionId);
     if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
@@ -953,7 +958,7 @@ ipcMain.handle("save-clipboard-image", (_event, sessionId: string): { ok: true; 
 });
 
 // The renderer has no clipboard of its own (no Node/Electron modules): it goes through main
-ipcMain.handle("clipboard-read-text", (): string => {
+trustedIpc.handle("clipboard-read-text", (): string => {
   try {
     return clipboard.readText();
   } catch (error) {
@@ -962,7 +967,7 @@ ipcMain.handle("clipboard-read-text", (): string => {
   }
 });
 
-ipcMain.handle("clipboard-write-text", (_event, text: unknown): void => {
+trustedIpc.handle("clipboard-write-text", (_event, text: unknown): void => {
   if (typeof text !== "string") throw new TypeError("clipboard-write-text expects a string");
   try {
     clipboard.writeText(text);
@@ -972,15 +977,15 @@ ipcMain.handle("clipboard-write-text", (_event, text: unknown): void => {
   }
 });
 
-ipcMain.handle("get-home-dir", (): string => os.homedir());
+trustedIpc.handle("get-home-dir", (): string => os.homedir());
 
 // Get git branches from directory
-ipcMain.handle("get-branches", async (_event, dirPath: string) => {
+trustedIpc.handle("get-branches", async (_event, dirPath: string) => {
   return getBranches(dirPath);
 });
 
 // Get last used settings
-ipcMain.handle("get-last-settings", () => {
+trustedIpc.handle("get-last-settings", () => {
   return (store as any).get("lastSessionConfig", {
     projectDir: "",
     sessionType: SessionType.WORKTREE,
@@ -991,7 +996,7 @@ ipcMain.handle("get-last-settings", () => {
 });
 
 // Save settings
-ipcMain.on("save-settings", (_event, config: SessionConfig) => {
+trustedIpc.on("save-settings", (_event, config: SessionConfig) => {
   (store as any).set("lastSessionConfig", config);
 });
 
@@ -1090,7 +1095,7 @@ function localClaudeGate(
 }
 
 // Create new session
-ipcMain.on("create-session", async (event, request: SessionConfig & {projectId?: string}) => {
+trustedIpc.on("create-session", async (event, request: SessionConfig & {projectId?: string}) => {
   try {
     const {projectId: requestedProjectId, ...config} = request;
     ensureScratchDir(config.projectDir);
@@ -1189,7 +1194,7 @@ ipcMain.on("create-session", async (event, request: SessionConfig & {projectId?:
 });
 
 // Handle session input
-ipcMain.on("session-input", (_event, sessionId: string, data: string) => {
+trustedIpc.on("session-input", (_event, sessionId: string, data: string) => {
   const ptyProcess = activePtyProcesses.get(sessionId);
 
   if (ptyProcess) {
@@ -1201,13 +1206,13 @@ ipcMain.on("session-input", (_event, sessionId: string, data: string) => {
 });
 
 // Renderer reports which session the user is looking at
-ipcMain.on("session-viewed", (_event, sessionId: string | null) => {
+trustedIpc.on("session-viewed", (_event, sessionId: string | null) => {
   viewedSessionId = sessionId;
   if (sessionId) applySessionStatus(sessionId, statusOnView);
 });
 
 // Handle session resize
-ipcMain.on("session-resize", (_event, sessionId: string, cols: number, rows: number) => {
+trustedIpc.on("session-resize", (_event, sessionId: string, cols: number, rows: number) => {
   const ptyProcess = activePtyProcesses.get(sessionId);
   if (ptyProcess) {
     ptyProcess.resize(cols, rows);
@@ -1227,7 +1232,7 @@ function stopSideShell(sessionId: string): void {
   }
 }
 
-ipcMain.handle("side-shell-start", (_event, sessionId: string, cols: number, rows: number): {ok: true} | {ok: false; error: string} => {
+trustedIpc.handle("side-shell-start", (_event, sessionId: string, cols: number, rows: number): {ok: true} | {ok: false; error: string} => {
   if (sideShellPtys.has(sessionId)) return {ok: true};
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
@@ -1257,7 +1262,7 @@ ipcMain.handle("side-shell-start", (_event, sessionId: string, cols: number, row
 
 // Pane breadcrumb: open the session's directory (its worktree when it has one) in the editor chosen
 // in Settings (a preset, or a custom command run without a shell)
-ipcMain.handle("open-in-editor", async (_event, sessionId: string): Promise<{ok: true} | {ok: false; error: string}> => {
+trustedIpc.handle("open-in-editor", async (_event, sessionId: string): Promise<{ok: true} | {ok: false; error: string}> => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
   const dir = session.worktreePath || session.config.projectDir;
@@ -1287,11 +1292,11 @@ ipcMain.handle("open-in-editor", async (_event, sessionId: string): Promise<{ok:
   });
 });
 
-ipcMain.on("side-shell-input", (_event, sessionId: string, data: string) => {
+trustedIpc.on("side-shell-input", (_event, sessionId: string, data: string) => {
   sideShellPtys.get(sessionId)?.write(data);
 });
 
-ipcMain.on("side-shell-resize", (_event, sessionId: string, cols: number, rows: number) => {
+trustedIpc.on("side-shell-resize", (_event, sessionId: string, cols: number, rows: number) => {
   try {
     sideShellPtys.get(sessionId)?.resize(Math.max(2, cols), Math.max(2, rows));
   } catch (error) {
@@ -1299,12 +1304,12 @@ ipcMain.on("side-shell-resize", (_event, sessionId: string, cols: number, rows: 
   }
 });
 
-ipcMain.on("side-shell-stop", (_event, sessionId: string) => {
+trustedIpc.on("side-shell-stop", (_event, sessionId: string) => {
   stopSideShell(sessionId);
 });
 
 // Reopen session (spawn new PTY for existing session)
-ipcMain.on("reopen-session", (event, sessionId: string) => {
+trustedIpc.on("reopen-session", (event, sessionId: string) => {
   // Check if PTY already active
   if (activePtyProcesses.has(sessionId)) {
     event.reply("session-reopened", sessionId);
@@ -1392,7 +1397,7 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
 });
 
 // Close session (kill PTY but keep session)
-ipcMain.on("close-session", (_event, sessionId: string) => {
+trustedIpc.on("close-session", (_event, sessionId: string) => {
   stopSessionPty(sessionId);
   stopSideShell(sessionId);
   settleSessionStatus(sessionId);
@@ -1407,7 +1412,7 @@ ipcMain.on("close-session", (_event, sessionId: string) => {
 });
 
 // Delete session (kill PTY, remove worktree, delete from store)
-ipcMain.on("delete-session", async (_event, sessionId: string) => {
+trustedIpc.on("delete-session", async (_event, sessionId: string) => {
   // Kill PTY if active
   stopSessionPty(sessionId);
   stopSideShell(sessionId);
@@ -1469,7 +1474,7 @@ function readSessionPrompts(session: PersistedSession): PromptHistory | undefine
 }
 
 // Preview of an [Image #N] label: the transcript holds the image once its prompt is sent
-ipcMain.handle("get-session-image", async (_event, sessionId: string, imageId: number): Promise<{ok: true; image: PastedImage} | {ok: false; error: string}> => {
+trustedIpc.handle("get-session-image", async (_event, sessionId: string, imageId: number): Promise<{ok: true; image: PastedImage} | {ok: false; error: string}> => {
   const notFound = {ok: false as const, error: `Image #${imageId} is not in the transcript yet: it can be previewed once its prompt is sent`};
   try {
     const session = getPersistedSessions().find(s => s.id === sessionId);
@@ -1483,7 +1488,7 @@ ipcMain.handle("get-session-image", async (_event, sessionId: string, imageId: n
   }
 });
 
-ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
+trustedIpc.handle("get-session-prompts", (_event, sessionId: string): string[] => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return [];
   if (session.config.codingAgent === "gemini") {
@@ -1501,7 +1506,7 @@ ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
 
 // Pane toolbar model menu for Antigravity: `agy models` takes seconds, so it is read once, async
 let agyModelsCache: Promise<AgyModelFamily[]> | null = null;
-ipcMain.handle("get-agy-models", (): Promise<AgyModelFamily[]> => {
+trustedIpc.handle("get-agy-models", (): Promise<AgyModelFamily[]> => {
   agyModelsCache ??= new Promise(resolve => {
     execFile(resolveAgyBinary(), ["models"], {timeout: 30000}, (error, stdout) => {
       const families = error ? [] : groupAgyModels(stdout);
@@ -1531,10 +1536,10 @@ function setUpAgyStatusPlugin(): void {
   if (!agyPluginResult.ok && agyPluginResult.reason === "failed" && /ENOENT/.test(agyPluginResult.message)) agyPluginResult = {ok: true};
   if (!agyPluginResult.ok) console.error(agyPluginResult.message);
 }
-ipcMain.handle("agy-plugin-status", (): AgyPluginResult => agyPluginResult ?? {ok: true});
+trustedIpc.handle("agy-plugin-status", (): AgyPluginResult => agyPluginResult ?? {ok: true});
 
 // Pane toolbar voice button: Gemini CLI has /voice only with experimental.voiceMode on
-ipcMain.handle("gemini-voice-enabled", (_event, sessionId: string): boolean => {
+trustedIpc.handle("gemini-voice-enabled", (_event, sessionId: string): boolean => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return false;
   return isGeminiVoiceModeEnabled(os.homedir(), session.worktreePath || session.config.projectDir);
@@ -1543,7 +1548,7 @@ ipcMain.handle("gemini-voice-enabled", (_event, sessionId: string): boolean => {
 // Pane toolbar: model and effort of the session's last reply, read from its transcript
 const sessionModels = new Map<string, SessionModel>();
 
-ipcMain.handle("get-session-model", (_event, sessionId: string): {model?: string; effort?: string} => {
+trustedIpc.handle("get-session-model", (_event, sessionId: string): {model?: string; effort?: string} => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return {};
   // Antigravity's transcript has no model: the renderer reads model and effort from its footer
@@ -1567,7 +1572,7 @@ ipcMain.handle("get-session-model", (_event, sessionId: string): {model?: string
 });
 
 // Pane toolbar: slash commands and skills available in the session's working directory
-ipcMain.handle("list-slash-commands", (_event, sessionId: string): SlashCommand[] => {
+trustedIpc.handle("list-slash-commands", (_event, sessionId: string): SlashCommand[] => {
   const session = getPersistedSessions().find(s => s.id === sessionId);
   const projectDir = session ? (session.worktreePath || session.linkedDir || session.config.projectDir) : undefined;
   try {
@@ -1585,12 +1590,12 @@ ipcMain.handle("list-slash-commands", (_event, sessionId: string): SlashCommand[
 });
 
 // Get all persisted sessions
-ipcMain.handle("get-all-sessions", () => {
+trustedIpc.handle("get-all-sessions", () => {
   return getPersistedSessions();
 });
 
 // Rename session
-ipcMain.on("rename-session", (_event, sessionId: string, newName: string) => {
+trustedIpc.on("rename-session", (_event, sessionId: string, newName: string) => {
   const sessions = getPersistedSessions();
   const session = sessions.find(s => s.id === sessionId);
 
@@ -1658,7 +1663,7 @@ function prepareAgyFork(sessions: PersistedSession[], original: PersistedSession
   };
 }
 
-ipcMain.on("fork-session", (event, sessionId: string) => {
+trustedIpc.on("fork-session", (event, sessionId: string) => {
   const agyOriginal = getPersistedSessions().find(s => s.id === sessionId && s.config.codingAgent === "antigravity");
   if (agyOriginal) {
     try {
@@ -1696,7 +1701,7 @@ ipcMain.on("fork-session", (event, sessionId: string) => {
 // Fork ending right before one of the user's prompts: Agentyard writes the fork's transcript (see
 // fork-transcript.ts) and Claude resumes it with that prompt waiting, unsent, in the input box.
 // No forkedFrom: re-forking the whole original would be wrong if this transcript went missing.
-ipcMain.on("fork-session-at", (event, sessionId: string, promptIndex: number, promptText: string) => {
+trustedIpc.on("fork-session-at", (event, sessionId: string, promptIndex: number, promptText: string) => {
   try {
     const sessions = getPersistedSessions();
     const {original, fork, dir, warning} = prepareFork(sessions, sessionId);
@@ -1743,7 +1748,7 @@ ipcMain.on("fork-session-at", (event, sessionId: string, promptIndex: number, pr
 
 // `restart`: the session may be running; stop it and wait for its PTY to exit before moving
 // (the renderer reopens it in the new directory afterwards).
-ipcMain.handle("set-session-dir", async (_event, sessionId: string, dir: string, restart = false): Promise<{ ok: true; session: PersistedSession; warning?: string } | { ok: false; error: string }> => {
+trustedIpc.handle("set-session-dir", async (_event, sessionId: string, dir: string, restart = false): Promise<{ ok: true; session: PersistedSession; warning?: string } | { ok: false; error: string }> => {
   try {
     if (hasLivePty(sessionId)) {
       if (!restart) return {ok: false, error: "Stop the session first"};
@@ -1798,7 +1803,7 @@ ipcMain.handle("set-session-dir", async (_event, sessionId: string, dir: string,
 
 // Takes effect on the next launch of the session.
 // Only the sidebar's listing changes: a running session keeps running
-ipcMain.handle("set-session-archived", (_event, sessionId: string, archived: boolean): {ok: true} | {ok: false; error: string} => {
+trustedIpc.handle("set-session-archived", (_event, sessionId: string, archived: boolean): {ok: true} | {ok: false; error: string} => {
   try {
     const sessions = getPersistedSessions();
     const session = sessions.find(s => s.id === sessionId);
@@ -1812,7 +1817,7 @@ ipcMain.handle("set-session-archived", (_event, sessionId: string, archived: boo
   }
 });
 
-ipcMain.handle("set-skip-permissions", (_event, sessionId: string, value: boolean): void => {
+trustedIpc.handle("set-skip-permissions", (_event, sessionId: string, value: boolean): void => {
   try {
     const sessions = getPersistedSessions();
     const session = sessions.find(s => s.id === sessionId);
@@ -1828,21 +1833,21 @@ ipcMain.handle("set-skip-permissions", (_event, sessionId: string, value: boolea
 });
 
 // Terminal settings handlers
-ipcMain.handle("get-terminal-settings", () => {
+trustedIpc.handle("get-terminal-settings", () => {
   return (store as any).get("terminalSettings");
 });
 
-ipcMain.handle("save-terminal-settings", (_event, settings: any) => {
+trustedIpc.handle("save-terminal-settings", (_event, settings: any) => {
   (store as any).set("terminalSettings", settings);
 });
 
 // Get app version
-ipcMain.handle("get-app-version", () => {
+trustedIpc.handle("get-app-version", () => {
   return app.getVersion();
 });
 
 // Apply session changes to project
-ipcMain.handle("apply-session-to-project", async (_event, sessionId: string) => {
+trustedIpc.handle("apply-session-to-project", async (_event, sessionId: string) => {
   try {
     const sessions = getPersistedSessions();
     const session = sessions.find(s => s.id === sessionId);
@@ -2017,7 +2022,7 @@ async function getMcpServerDetails(name: string) {
   }
 }
 
-ipcMain.handle("list-mcp-servers", async (_event, sessionId: string) => {
+trustedIpc.handle("list-mcp-servers", async (_event, sessionId: string) => {
   try {
     // Trigger an immediate MCP list command in the session's poller
     const mcpPoller = mcpPollerPtyProcesses.get(sessionId);
@@ -2032,7 +2037,7 @@ ipcMain.handle("list-mcp-servers", async (_event, sessionId: string) => {
   }
 });
 
-ipcMain.handle("add-mcp-server", async (_event, name: string, config: any) => {
+trustedIpc.handle("add-mcp-server", async (_event, name: string, config: any) => {
   try {
     await addMcpServer(name, config);
   } catch (error) {
@@ -2041,7 +2046,7 @@ ipcMain.handle("add-mcp-server", async (_event, name: string, config: any) => {
   }
 });
 
-ipcMain.handle("remove-mcp-server", async (_event, name: string) => {
+trustedIpc.handle("remove-mcp-server", async (_event, name: string) => {
   try {
     await removeMcpServer(name);
   } catch (error) {
@@ -2050,7 +2055,7 @@ ipcMain.handle("remove-mcp-server", async (_event, name: string) => {
   }
 });
 
-ipcMain.handle("get-mcp-server-details", async (_event, name: string) => {
+trustedIpc.handle("get-mcp-server-details", async (_event, name: string) => {
   try {
     return await getMcpServerDetails(name);
   } catch (error) {
@@ -2059,9 +2064,9 @@ ipcMain.handle("get-mcp-server-details", async (_event, name: string) => {
   }
 });
 
-ipcMain.handle("get-projects", () => getProjects());
+trustedIpc.handle("get-projects", () => getProjects());
 
-ipcMain.handle("save-project", (_event, project: Project): { ok: true } | { ok: false; error: string } => {
+trustedIpc.handle("save-project", (_event, project: Project): { ok: true } | { ok: false; error: string } => {
   try {
     // The built-in standalone project keeps its id and name and never ends up without a directory.
     const standalone = isStandaloneProject(project.id);
@@ -2122,7 +2127,7 @@ ipcMain.handle("save-project", (_event, project: Project): { ok: true } | { ok: 
   }
 });
 
-ipcMain.handle("scan-parent-dir", async (_event, parent: string, prefix: string): Promise<string[]> => {
+trustedIpc.handle("scan-parent-dir", async (_event, parent: string, prefix: string): Promise<string[]> => {
   try {
     const dirents = await fs.promises.readdir(parent, {withFileTypes: true});
     const entries = await Promise.all(
@@ -2147,7 +2152,7 @@ interface DirInfo {
   occupancy: Occupancy;
 }
 
-ipcMain.handle("get-dir-info", async (_event, projectId: string): Promise<DirInfo[]> => {
+trustedIpc.handle("get-dir-info", async (_event, projectId: string): Promise<DirInfo[]> => {
   try {
     const project = getProjects().find(p => p.id === projectId);
     if (!project) return [];
@@ -2174,7 +2179,7 @@ ipcMain.handle("get-dir-info", async (_event, projectId: string): Promise<DirInf
 });
 
 // Window controls of the frameless window (buttons at the right of the tab row)
-ipcMain.on("window-control", (_event, action: "minimize" | "toggle-maximize" | "close") => {
+trustedIpc.on("window-control", (_event, action: "minimize" | "toggle-maximize" | "close") => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (action === "minimize") mainWindow.minimize();
   else if (action === "toggle-maximize") {
@@ -2195,10 +2200,11 @@ const createWindow = () => {
     // puts them on the left. Moving the window stays with the compositor (-webkit-app-region: drag).
     frame: false,
     webPreferences: {
-      // tsc output until the preload is bundled (Task 4)
+      // esbuild bundle: a sandboxed preload can load nothing but electron
       preload: path.join(__dirname, "preload.js"),
-      nodeIntegration: true,
-      contextIsolation: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
     },
   });
 
@@ -2207,7 +2213,7 @@ const createWindow = () => {
   mainWindow.on("unmaximize", sendMaximized);
 
   hardenNavigation(mainWindow.webContents);
-  mainWindow.loadFile("index.html");
+  mainWindow.loadURL(INDEX_HTML_URL);
 
   // Load persisted sessions once window is ready
   mainWindow.webContents.on("did-finish-load", () => {

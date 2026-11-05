@@ -5,7 +5,6 @@ import {
   EVENT_CHANNELS,
   exposeAgentyardApi,
   INVOKE_CHANNELS,
-  pickBridge,
   SEND_CHANNELS,
 } from "./ipc-channels";
 
@@ -96,22 +95,6 @@ describe("exposeAgentyardApi", () => {
   });
 });
 
-describe("pickBridge", () => {
-  it("uses contextBridge when the page is context isolated", () => {
-    const contextBridge = {exposeInMainWorld: jest.fn()};
-    expect(pickBridge(true, contextBridge, {})).toBe(contextBridge);
-  });
-
-  it("assigns onto the window when context isolation is off, where contextBridge would throw", () => {
-    const contextBridge = {exposeInMainWorld: jest.fn(() => { throw new Error("contextIsolation is off"); })};
-    const target: Record<string, unknown> = {};
-    const bridge = pickBridge(false, contextBridge, target);
-    bridge.exposeInMainWorld("agentyard", {x: 1});
-    expect(target.agentyard).toEqual({x: 1});
-    expect(contextBridge.exposeInMainWorld).not.toHaveBeenCalled();
-  });
-});
-
 describe("channel lists against the sources", () => {
   const read = (file: string) => fs.readFileSync(path.join(__dirname, file), "utf8");
   const scan = (source: string, pattern: RegExp) => new Set([...source.matchAll(pattern)].map(m => m[1]));
@@ -121,18 +104,18 @@ describe("channel lists against the sources", () => {
 
   const sorted = (set: Set<string>) => [...set].sort();
 
-  it("INVOKE_CHANNELS is every ipcMain.handle and renderer invoke channel", () => {
+  it("INVOKE_CHANNELS is every trustedIpc.handle and renderer invoke channel", () => {
     const used = new Set([
-      ...scan(main, /ipcMain\.handle\(\s*"([^"]+)"/g),
+      ...scan(main, /trustedIpc\.handle\(\s*"([^"]+)"/g),
       ...scan(renderer, new RegExp(`${client}\\.invoke\\(\\s*"([^"]+)"`, "g")),
     ]);
     expect(used.size).toBeGreaterThan(25);
     expect(sorted(new Set(INVOKE_CHANNELS))).toEqual(sorted(used));
   });
 
-  it("SEND_CHANNELS is every ipcMain.on and renderer send channel", () => {
+  it("SEND_CHANNELS is every trustedIpc.on and renderer send channel", () => {
     const used = new Set([
-      ...scan(main, /ipcMain\.on\(\s*"([^"]+)"/g),
+      ...scan(main, /trustedIpc\.on\(\s*"([^"]+)"/g),
       ...scan(renderer, new RegExp(`${client}\\.send\\(\\s*"([^"]+)"`, "g")),
     ]);
     expect(used.size).toBeGreaterThan(12);
