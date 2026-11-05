@@ -1270,19 +1270,12 @@ trustedIpc.handle("side-shell-start", (_event, sessionId: string, cols: number, 
 // Pane breadcrumb: open the session's directory (its worktree when it has one) in the editor chosen
 // in Settings (a preset, or a custom command run without a shell)
 trustedIpc.handle("open-in-editor", async (_event, sessionId: string): Promise<{ok: true} | {ok: false; error: string}> => {
+  if (typeof sessionId !== "string") return {ok: false, error: "Session id must be a string"};
   const session = getPersistedSessions().find(s => s.id === sessionId);
   if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
   const dir = session.worktreePath || session.config.projectDir;
   if (!dir || !fs.existsSync(dir)) return {ok: false, error: `Directory not found: ${dir || "(none)"}`};
-  // A worktree is created by main under the worktree base directory; a local session's directory is a project's
-  if (!session.worktreePath) {
-    try {
-      assertDirectoryInProjects(dir, getProjects().flatMap(p => p.dirs));
-    } catch (error) {
-      return {ok: false, error: error instanceof Error ? error.message : String(error)};
-    }
-  }
-  const settings =(store as any).get("terminalSettings") ?? {};
+  const settings = (store as any).get("terminalSettings") ?? {};
   const launch = buildEditorLaunch({
     editorId: typeof settings.editor === "string" ? settings.editor : DEFAULT_EDITOR_ID,
     customCommand: typeof settings.editorCommand === "string" ? settings.editorCommand : "",
