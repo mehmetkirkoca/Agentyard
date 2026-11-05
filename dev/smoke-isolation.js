@@ -535,6 +535,7 @@ async function run(results, {packaged, home, tempRoot}) {
   const env = childEnv(home, {SMOKE_ROGUE_PAGE: roguePage, SMOKE_PROBE_PRELOAD: probePreload});
 
   console.log(`--- First start (${packaged ? "packaged" : "checkout"}): saved data, isolation, UI`);
+  let created;
   const first = await startApp({...launchSpec, env});
   try {
     const url = await first.cdp.evaluate("location.href");
@@ -544,7 +545,7 @@ async function run(results, {packaged, home, tempRoot}) {
 
     await checkIsolation(first.cdp, results, home);
     await checkSeededData(first.cdp, results, entries);
-    await checkNewSession(first.cdp, results, home);
+    created = await checkNewSession(first.cdp, results, home);
 
     if (packaged) {
       results.skip("rejected sender and preload probe in the packaged binary", "a packaged binary takes no -r, so no second window can be opened from outside; both run in the checkout run, and the same code path accepted the asar URL here");
@@ -577,8 +578,9 @@ async function run(results, {packaged, home, tempRoot}) {
     results.check("localStorage survives the restart", stored === SEEDED_STORAGE.sidebarWidth, stored);
     await waitFor(() => second.cdp.evaluate(`document.querySelectorAll(".xterm-rows").length > 0`), "a terminal in the restored panes", 30000);
     const restored = JSON.parse(await second.cdp.evaluate(`localStorage.getItem("workspaces")`));
-    const shown = JSON.stringify(restored.workspaces[0].panes.root);
-    results.check("panes come back from the saved layout", sessions.some(s => shown.includes(s.id)), restored.workspaces[0].panes.root);
+    // Only the first start's renderer can have put this session in the layout: the seed does not know it
+    const saved = JSON.stringify({panes: restored.workspaces.map(w => w.panes), membership: restored.membership});
+    results.check("the layout saved by the isolated renderer reloads", saved.includes(created.id), {created: created.id, root: restored.workspaces[0].panes.root, membership: restored.membership});
     checkRejections(second, results, !packaged);
     checkConsole(second, results);
   } finally {
