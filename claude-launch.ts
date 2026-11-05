@@ -1,3 +1,5 @@
+import {quotePath} from "./attach-utils";
+
 /**
  * Env vars set by a parent Claude Code process. When inherited by a nested
  * claude they silently disable transcript writing, so they are stripped.
@@ -74,7 +76,7 @@ export function buildClaudeCommand(opts: {
     parts.push(opts.isNew ? `--session-id ${opts.sessionUuid}` : `--resume ${opts.sessionUuid}`);
   }
   if (opts.skipPermissions) parts.push("--dangerously-skip-permissions");
-  if (opts.mcpConfigPath) parts.push(`--mcp-config ${opts.mcpConfigPath}`);
-  if (opts.settingsPath) parts.push(`--settings ${opts.settingsPath}`);
+  if (opts.mcpConfigPath) parts.push(`--mcp-config ${quotePath(opts.mcpConfigPath)}`);
+  if (opts.settingsPath) parts.push(`--settings ${quotePath(opts.settingsPath)}`);
   return parts.join(" ");
 }

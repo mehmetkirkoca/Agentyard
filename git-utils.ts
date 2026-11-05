@@ -43,3 +43,25 @@ export async function getCurrentBranch(dirPath: string): Promise<string> {
     return "";
   }
 }
+
+// A ref can be named "--output=x" although `git branch` refuses to create one
+function assertNotOption(branch: string): void {
+  if (branch.startsWith("-")) throw new Error(`Invalid branch name: ${branch}`);
+}
+
+/**
+ * The patch from a branch to the working tree. Runs without a shell: branch names come from the
+ * repository and may hold shell syntax.
+ */
+export async function diffAgainstBranch(dirPath: string, branch: string): Promise<string> {
+  assertNotOption(branch);
+  return simpleGit(dirPath).raw(["diff", "--end-of-options", branch, "--"]);
+}
+
+/**
+ * Create a worktree on a new branch started from a parent branch
+ */
+export async function addWorktree(projectDir: string, branchName: string, worktreePath: string, parentBranch: string): Promise<void> {
+  assertNotOption(parentBranch);
+  await simpleGit(projectDir).raw(["worktree", "add", "-b", branchName, worktreePath, parentBranch]);
+}

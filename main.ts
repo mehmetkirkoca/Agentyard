@@ -17,7 +17,8 @@ import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
-import {getBranches, getCurrentBranch} from "./git-utils";
+import {addWorktree, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
+import {hardenNavigation} from "./window-security";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
@@ -25,7 +26,7 @@ import {listAntigravitySlashCommands, listGeminiSlashCommands, listSlashCommands
 import {buildForkTranscript} from "./fork-transcript";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {BRACKETED_PASTE_MODE_ENABLE, isTerminalReady} from "./terminal-utils";
-import {hasMcpListResult, parseMcpListOutput} from "./mcp-utils";
+import {hasMcpListResult, mcpAddJsonCommand, mcpGetCommand, mcpRemoveCommand, parseMcpListOutput} from "./mcp-utils";
 import {inspectTranscript, relinkTranscript} from "./link-store";
 import {TranscriptMeta} from "./transcript-meta";
 import {
@@ -842,8 +843,6 @@ function spawnSessionPty(
 // No longer needed since worktrees are in ~/worktrees, not in project directory
 
 async function createWorktree(projectDir: string, parentBranch: string, sessionNumber: number, sessionUuid: string, customBranchName?: string): Promise<{ worktreePath: string; branchName: string }> {
-  const git = simpleGit(projectDir);
-
   const projectDirName = getProjectWorktreeDirName(projectDir);
   const worktreesBaseDir = getWorktreeBaseDir();
   const projectWorktreeDir = path.join(worktreesBaseDir, projectDirName);
@@ -876,7 +875,7 @@ async function createWorktree(projectDir: string, parentBranch: string, sessionN
 
   // Create new worktree with a new branch from parent branch
   // This creates a new branch named "agentyard/session<N>" starting from the parent branch
-  await git.raw(["worktree", "add", "-b", branchName, worktreePath, parentBranch]);
+  await addWorktree(projectDir, branchName, worktreePath, parentBranch);
 
   return { worktreePath, branchName };
 }
@@ -1846,10 +1845,7 @@ ipcMain.handle("apply-session-to-project", async (_event, sessionId: string) => 
 
     // Generate patch file from parent branch to current state (includes commits + unstaged changes)
     // Using diff against parent branch to capture all changes
-    const { stdout: patchContent } = await execAsync(
-      `git diff ${parentBranch}`,
-      { cwd: worktreePath }
-    );
+    const patchContent = await diffAgainstBranch(worktreePath, parentBranch);
 
     // If patch is empty, there are no changes to apply
     if (!patchContent.trim()) {
@@ -1960,19 +1956,16 @@ async function execClaudeCommand(command: string): Promise<string> {
 
 async function addMcpServer(name: string, config: any) {
   // Use add-json to support full configuration including env vars, headers, etc.
-  const jsonConfig = JSON.stringify(config).replace(/'/g, "'\\''"); // Escape single quotes for shell
-  const command = `claude mcp add-json --scope user "${name}" '${jsonConfig}'`;
-  await execClaudeCommand(command);
+  await execClaudeCommand(mcpAddJsonCommand(name, config));
 }
 
 async function removeMcpServer(name: string) {
-  const command = `claude mcp remove "${name}"`;
-  await execClaudeCommand(command);
+  await execClaudeCommand(mcpRemoveCommand(name));
 }
 
 async function getMcpServerDetails(name: string) {
   try {
-    const output = await execClaudeCommand(`claude mcp get "${name}"`);
+    const output = await execClaudeCommand(mcpGetCommand(name));
 
     // Parse the output to extract details
     const details: any = { name };
@@ -2189,6 +2182,7 @@ const createWindow = () => {
   mainWindow.on("maximize", sendMaximized);
   mainWindow.on("unmaximize", sendMaximized);
 
+  hardenNavigation(mainWindow.webContents);
   mainWindow.loadFile("index.html");
 
   // Load persisted sessions once window is ready

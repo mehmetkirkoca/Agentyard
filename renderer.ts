@@ -2,6 +2,8 @@ import {FitAddon} from "@xterm/addon-fit";
 import {clipboard, ipcRenderer, webUtils} from "electron";
 import {Terminal} from "xterm";
 import {buildPathPaste} from "./attach-utils";
+import {escapeHtml} from "./html-utils";
+import {mcpServerDetailsHtml} from "./mcp-utils";
 import {findImageTags, PastedImage} from "./transcript-images";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
@@ -1128,15 +1130,6 @@ function applyTabStatus(sessionId: string) {
 
 function updateSessionState(sessionId: string, _isActive: boolean) {
   refreshSessionIndicator(sessionId);
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 // Non-blocking notification card in the top-right corner; closes by itself or on click
@@ -4789,27 +4782,7 @@ async function showMcpServerDetails(name: string) {
     const details = await ipcRenderer.invoke("get-mcp-server-details", name);
 
     if (detailsContent) {
-      let html = "";
-      if (details.scope) {
-        html += `<div><strong>Scope:</strong> ${details.scope}</div>`;
-      }
-      if (details.status) {
-        html += `<div><strong>Status:</strong> ${details.status}</div>`;
-      }
-      if (details.type) {
-        html += `<div><strong>Type:</strong> ${details.type}</div>`;
-      }
-      if (details.url) {
-        html += `<div><strong>URL:</strong> ${details.url}</div>`;
-      }
-      if (details.command) {
-        html += `<div><strong>Command:</strong> ${details.command}</div>`;
-      }
-      if (details.args) {
-        html += `<div><strong>Args:</strong> ${details.args}</div>`;
-      }
-
-      detailsContent.innerHTML = html;
+      detailsContent.innerHTML = mcpServerDetailsHtml(details);
     }
 
     // Store current server name for remove button

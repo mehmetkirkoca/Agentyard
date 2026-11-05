@@ -1,4 +1,7 @@
-// Parsing helpers for `claude mcp list` output
+// Helpers for the `claude mcp` commands: building them and parsing `claude mcp list` output
+
+import {shellQuote} from "./antigravity-launch";
+import {escapeHtml} from "./html-utils";
 
 export interface McpServerStatus {
   name: string;
@@ -58,4 +61,51 @@ export function parseMcpListOutput(output: string): McpServerStatus[] {
 export function hasMcpListResult(chunk: string): boolean {
   if (chunk.includes(NO_SERVERS_MESSAGE)) return true;
   return cleanLines(chunk).some(line => SERVER_LINE.test(line));
+}
+
+// These commands are typed into a PTY, where a control character acts before any quoting applies.
+// Refused rather than stripped: a stripped name would address a different server.
+function quoteServerName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f-\x9f]/.test(name)) throw new Error("MCP server name contains control characters");
+  return shellQuote(name);
+}
+
+export function mcpAddJsonCommand(name: string, config: unknown): string {
+  return `claude mcp add-json --scope user -- ${quoteServerName(name)} ${shellQuote(JSON.stringify(config))}`;
+}
+
+export function mcpRemoveCommand(name: string): string {
+  return `claude mcp remove -- ${quoteServerName(name)}`;
+}
+
+export function mcpGetCommand(name: string): string {
+  return `claude mcp get -- ${quoteServerName(name)}`;
+}
+
+export interface McpServerDetails {
+  scope?: string;
+  status?: string;
+  type?: string;
+  url?: string;
+  command?: string;
+  args?: string;
+}
+
+/**
+ * The details modal's content. The values are CLI output and can come from a project's .mcp.json.
+ */
+export function mcpServerDetailsHtml(details: McpServerDetails): string {
+  const rows: [string, string | undefined][] = [
+    ["Scope", details.scope],
+    ["Status", details.status],
+    ["Type", details.type],
+    ["URL", details.url],
+    ["Command", details.command],
+    ["Args", details.args],
+  ];
+  return rows
+    .filter(([, value]) => value)
+    .map(([label, value]) => `<div><strong>${label}:</strong> ${escapeHtml(String(value))}</div>`)
+    .join("");
 }

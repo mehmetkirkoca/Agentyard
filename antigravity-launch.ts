@@ -51,7 +51,7 @@ function canExecute(file: string): boolean {
   }
 }
 
-const shellQuote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
+export const shellQuote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
 
 // agy's conversation ids are uuids. They are read back from the status file, which tools agy runs
 // can also write to, so anything else is never used (and never typed into the shell).

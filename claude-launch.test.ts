@@ -129,3 +129,21 @@ describe("claudeScrollEnv", () => {
     for (const level of [0, -1, 21, 1.5, NaN, undefined, "3", null]) expect(claudeScrollEnv(level)).toEqual({});
   });
 });
+
+describe("buildClaudeCommand paths", () => {
+  it("keeps hostile config paths as literal arguments", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentyard-launch-"));
+    const canary = path.join(dir, "canary");
+    const mcpConfigPath = path.join(dir, `a b$(touch ${canary})`, "m.json");
+    const settingsPath = path.join(dir, `c;touch ${canary}`, "s.json");
+    try {
+      const command = buildClaudeCommand({sessionUuid: "u", isNew: false, skipPermissions: false, mcpConfigPath, settingsPath});
+      const argv = execFileSync("bash", ["-c", `claude() { printf '%s\\0' "$@"; }; ${command}`], {encoding: "utf8"})
+        .split("\0").slice(0, -1);
+      expect(argv).toEqual(["--resume", "u", "--mcp-config", mcpConfigPath, "--settings", settingsPath]);
+      expect(fs.existsSync(canary)).toBe(false);
+    } finally {
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
+});

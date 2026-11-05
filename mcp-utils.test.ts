@@ -1,4 +1,8 @@
-import {hasMcpListResult, parseMcpListOutput} from './mcp-utils';
+import {execFileSync} from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {hasMcpListResult, mcpAddJsonCommand, mcpGetCommand, mcpRemoveCommand, mcpServerDetailsHtml, parseMcpListOutput} from './mcp-utils';
 
 // Real `claude mcp list` output from Claude Code 2.1.x
 const CURRENT_OUTPUT = [
@@ -93,5 +97,65 @@ describe('hasMcpListResult', () => {
 
   it('is false for unrelated output', () => {
     expect(hasMcpListResult('Checking MCP server health…\r\n')).toBe(false);
+  });
+});
+
+describe('MCP shell commands', () => {
+  // The real shell parses the command; a stub claude reports the arguments it received
+  const argvOf = (command: string): string[] =>
+    execFileSync('bash', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], {encoding: 'utf8'})
+      .split('\0').slice(0, -1);
+
+  let dir: string;
+  let canary: string;
+  let hostile: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentyard-mcp-'));
+    canary = path.join(dir, 'canary');
+    hostile = `x$(touch ${canary})\`touch ${canary}\`"'; touch ${canary}; '`;
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, {recursive: true, force: true});
+  });
+
+  it('passes a hostile name to mcp get as one literal argument', () => {
+    expect(argvOf(mcpGetCommand(hostile))).toEqual(['mcp', 'get', '--', hostile]);
+    expect(fs.existsSync(canary)).toBe(false);
+  });
+
+  it('passes a hostile name to mcp remove as one literal argument', () => {
+    expect(argvOf(mcpRemoveCommand(hostile))).toEqual(['mcp', 'remove', '--', hostile]);
+    expect(fs.existsSync(canary)).toBe(false);
+  });
+
+  it('passes a hostile name and config to mcp add-json as literal arguments', () => {
+    const config = {command: hostile};
+    expect(argvOf(mcpAddJsonCommand(hostile, config)))
+      .toEqual(['mcp', 'add-json', '--scope', 'user', '--', hostile, JSON.stringify(config)]);
+    expect(fs.existsSync(canary)).toBe(false);
+  });
+
+  it('refuses a name with control characters, which a PTY would act on', () => {
+    expect(() => mcpGetCommand('a\rtouch x\r')).toThrow(/control characters/i);
+    expect(() => mcpRemoveCommand('a\x03')).toThrow(/control characters/i);
+    expect(() => mcpAddJsonCommand('a\n', {})).toThrow(/control characters/i);
+  });
+});
+
+describe('mcpServerDetailsHtml', () => {
+  it('escapes every value', () => {
+    const payload = '<img src=x onerror=alert(1)>';
+    const html = mcpServerDetailsHtml({
+      scope: payload, status: payload, type: payload, url: payload, command: payload, args: payload,
+    });
+    expect(html).not.toContain('<img');
+    expect(html.match(/&lt;img src=x onerror=alert\(1\)&gt;/g)).toHaveLength(6);
+  });
+
+  it('shows only the fields that are present', () => {
+    expect(mcpServerDetailsHtml({url: 'https://x.test/mcp'}))
+      .toBe('<div><strong>URL:</strong> https://x.test/mcp</div>');
   });
 });
