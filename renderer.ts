@@ -1,18 +1,18 @@
 import {FitAddon} from "@xterm/addon-fit";
 import {clipboard, ipcRenderer, webUtils} from "electron";
 import {Terminal} from "xterm";
-import {buildPathPaste} from "./attach-utils";
+import {buildPathPaste} from "./attach-paste";
 import {escapeHtml} from "./html-utils";
 import {mcpServerDetailsHtml} from "./mcp-utils";
 import {findImageTags, PastedImage} from "./transcript-images";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
-import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
+import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-constants";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, formatAge, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey, resyncViewport} from "./terminal-utils";
-import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-launch";
+import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-presets";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
-import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
+import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-choices";
 import {
   applyTemplate,
   assignSession,
@@ -75,7 +75,7 @@ import {
   WorkspaceState,
   workspaceOf,
 } from "./workspace-model";
-import * as path from "path";
+import {baseName, samePath} from "./renderer-path";
 
 interface Session {
   id: string;
@@ -1976,7 +1976,7 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
   const projectName = projectId && isStandaloneProject(projectId)
     ? STANDALONE_PROJECT_NAME
     : projects.find(p => p.id === projectId)?.name ?? "";
-  const dirName = dir ? (info?.name ?? path.basename(dir)) : "choose directory";
+  const dirName = dir ? (info?.name ?? baseName(dir)) : "choose directory";
   const branch = info?.branch ?? session.meta.gitBranch ?? null;
   const dirMode = !isLocalClaude(session.config) || !hasOtherDirectory(projectId, dir) ? "text"
     : runtime[session.id]?.externallyOpen ? "external"
@@ -2082,8 +2082,7 @@ async function openInEditor(sessionId: string) {
 // with a single directory there is nothing to switch to, so no picker is offered.
 function hasOtherDirectory(projectId: string | undefined, currentDir: string): boolean {
   const dirs = projects.find(p => p.id === projectId)?.dirs ?? [];
-  const current = currentDir ? path.resolve(currentDir) : "";
-  return dirs.some(d => path.resolve(d) !== current);
+  return dirs.some(d => !samePath(d, currentDir));
 }
 
 // 📁 in a pane header: opens the picker; a running session is restarted only once a directory is picked
@@ -4702,7 +4701,7 @@ document.getElementById("project-scan")?.addEventListener("click", async () => {
     const present = projectDraftDirs.includes(dir);
     return `<label class="${present ? "muted" : ""}">
       <input type="checkbox" class="form-checkbox scan-item" value="${escapeHtml(dir)}" checked ${present ? "disabled" : ""} />
-      <span class="truncate" title="${escapeHtml(dir)}">${escapeHtml(path.basename(dir))}${present ? " (already added)" : ""}</span>
+      <span class="truncate" title="${escapeHtml(dir)}">${escapeHtml(baseName(dir))}${present ? " (already added)" : ""}</span>
     </label>`;
   }).join("");
   projectAddSelectedBtn?.classList.remove("hidden");

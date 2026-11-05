@@ -1,6 +1,6 @@
 // Helpers for the `claude mcp` commands: building them and parsing `claude mcp list` output
 
-import {shellQuote} from "./antigravity-launch";
+import {shellQuote} from "./attach-paste";
 import {escapeHtml} from "./html-utils";
 
 export interface McpServerStatus {

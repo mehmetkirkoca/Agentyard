@@ -1,4 +1,4 @@
-import { isStandaloneProject } from "./project-model";
+import { isStandaloneProject } from "./project-constants";
 import { PersistedSession, Project, SessionStatus } from "./types";
 
 export interface SidebarGroup {
