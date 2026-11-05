@@ -20,6 +20,7 @@ import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
 import {addWorktree, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
 import {createTrustedIpc, hardenNavigation} from "./window-security";
+import {assertDirectoryInProjects, assertMcpConfig, isKnownSessionId} from "./ipc-validation";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
@@ -1195,6 +1196,12 @@ trustedIpc.on("create-session", async (event, request: SessionConfig & {projectI
 
 // Handle session input
 trustedIpc.on("session-input", (_event, sessionId: string, data: string) => {
+  // The live PTY map is the source of truth: a created or reopened session is in it before the
+  // renderer is told, so only sessions without a PTY (or non-string data) are refused.
+  if (typeof data !== "string" || !isKnownSessionId(sessionId, activePtyProcesses)) {
+    console.error("Ignoring session-input for an unknown session or non-string data");
+    return;
+  }
   const ptyProcess = activePtyProcesses.get(sessionId);
 
   if (ptyProcess) {
@@ -1267,7 +1274,15 @@ trustedIpc.handle("open-in-editor", async (_event, sessionId: string): Promise<{
   if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
   const dir = session.worktreePath || session.config.projectDir;
   if (!dir || !fs.existsSync(dir)) return {ok: false, error: `Directory not found: ${dir || "(none)"}`};
-  const settings = (store as any).get("terminalSettings") ?? {};
+  // A worktree is created by main under the worktree base directory; a local session's directory is a project's
+  if (!session.worktreePath) {
+    try {
+      assertDirectoryInProjects(dir, getProjects().flatMap(p => p.dirs));
+    } catch (error) {
+      return {ok: false, error: error instanceof Error ? error.message : String(error)};
+    }
+  }
+  const settings =(store as any).get("terminalSettings") ?? {};
   const launch = buildEditorLaunch({
     editorId: typeof settings.editor === "string" ? settings.editor : DEFAULT_EDITOR_ID,
     customCommand: typeof settings.editorCommand === "string" ? settings.editorCommand : "",
@@ -1293,6 +1308,10 @@ trustedIpc.handle("open-in-editor", async (_event, sessionId: string): Promise<{
 });
 
 trustedIpc.on("side-shell-input", (_event, sessionId: string, data: string) => {
+  if (typeof data !== "string" || !isKnownSessionId(sessionId, sideShellPtys)) {
+    console.error("Ignoring side-shell-input for an unknown side shell or non-string data");
+    return;
+  }
   sideShellPtys.get(sessionId)?.write(data);
 });
 
@@ -1864,7 +1883,8 @@ trustedIpc.handle("apply-session-to-project", async (_event, sessionId: string) 
       return { success: false, error: "Session missing worktree path or parent branch" };
     }
 
-    const projectDir = session.config.projectDir;
+    // The patch is applied here: it must be a registered project directory (a throw reaches the catch below)
+    const projectDir = assertDirectoryInProjects(session.config.projectDir, getProjects().flatMap(p => p.dirs));
     const worktreePath = session.worktreePath;
     const parentBranch = session.config.parentBranch;
     const patchFilename = `agentyard-patch-${Date.now()}.patch`;
@@ -2039,7 +2059,8 @@ trustedIpc.handle("list-mcp-servers", async (_event, sessionId: string) => {
 
 trustedIpc.handle("add-mcp-server", async (_event, name: string, config: any) => {
   try {
-    await addMcpServer(name, config);
+    if (typeof name !== "string" || !name) throw new Error("MCP server name must be a non-empty string");
+    await addMcpServer(name, assertMcpConfig(config));
   } catch (error) {
     console.error("Error adding MCP server:", error);
     throw error;
@@ -2048,6 +2069,7 @@ trustedIpc.handle("add-mcp-server", async (_event, name: string, config: any) =>
 
 trustedIpc.handle("remove-mcp-server", async (_event, name: string) => {
   try {
+    if (typeof name !== "string" || !name) throw new Error("MCP server name must be a non-empty string");
     await removeMcpServer(name);
   } catch (error) {
     console.error("Error removing MCP server:", error);
