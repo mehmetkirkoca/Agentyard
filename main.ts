@@ -958,15 +958,17 @@ ipcMain.handle("clipboard-read-text", (): string => {
     return clipboard.readText();
   } catch (error) {
     console.error("Error reading clipboard text:", error);
-    return "";
+    throw error;
   }
 });
 
-ipcMain.handle("clipboard-write-text", (_event, text: string): void => {
+ipcMain.handle("clipboard-write-text", (_event, text: unknown): void => {
+  if (typeof text !== "string") throw new TypeError("clipboard-write-text expects a string");
   try {
-    clipboard.writeText(String(text));
+    clipboard.writeText(text);
   } catch (error) {
     console.error("Error writing clipboard text:", error);
+    throw error;
   }
 });
 

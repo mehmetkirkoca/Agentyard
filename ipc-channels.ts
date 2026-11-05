@@ -83,7 +83,8 @@ export const EVENT_CHANNELS: readonly string[] = [
 export type AgentyardListener = (...args: any[]) => void;
 
 export interface AgentyardApi {
-  invoke(channel: string, ...args: unknown[]): Promise<unknown>;
+  /** Resolves with whatever main returns; any keeps the typing ipcRenderer.invoke had. */
+  invoke(channel: string, ...args: unknown[]): Promise<any>;
   send(channel: string, ...args: unknown[]): void;
   /** Subscribes to a main-to-renderer event; the returned function removes the listener. */
   on(channel: string, listener: AgentyardListener): () => void;
