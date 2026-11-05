@@ -9,6 +9,7 @@ import {simpleGit} from "simple-git";
 import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
+import {findPastedImage, PastedImage} from "./transcript-images";
 import {buildClaudeCommand, buildHookSettings, buildPtyEnv, claudeScrollEnv} from "./claude-launch";
 import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
 import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agySessionName, buildAgyCommand, createAgyWaitingDetector, ensureAgySnapBridge, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
@@ -1445,6 +1446,21 @@ function readSessionPrompts(session: PersistedSession): PromptHistory | undefine
   promptHistories.set(session.sessionUuid, history);
   return history;
 }
+
+// Preview of an [Image #N] label: the transcript holds the image once its prompt is sent
+ipcMain.handle("get-session-image", async (_event, sessionId: string, imageId: number): Promise<{ok: true; image: PastedImage} | {ok: false; error: string}> => {
+  const notFound = {ok: false as const, error: `Image #${imageId} is not in the transcript yet: it can be previewed once its prompt is sent`};
+  try {
+    const session = getPersistedSessions().find(s => s.id === sessionId);
+    const file = session && sessionTranscriptFile(session);
+    if (!file) return notFound;
+    const image = findPastedImage(await fs.promises.readFile(file, "utf-8"), imageId);
+    return image ? {ok: true, image} : notFound;
+  } catch (error) {
+    console.error("Error reading a session image:", error);
+    return {ok: false, error: `Could not read Image #${imageId}: ${error instanceof Error ? error.message : String(error)}`};
+  }
+});
 
 ipcMain.handle("get-session-prompts", (_event, sessionId: string): string[] => {
   const session = getPersistedSessions().find(s => s.id === sessionId);

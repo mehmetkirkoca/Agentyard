@@ -2,6 +2,7 @@ import {FitAddon} from "@xterm/addon-fit";
 import {clipboard, ipcRenderer, webUtils} from "electron";
 import {Terminal} from "xterm";
 import {buildPathPaste} from "./attach-utils";
+import {findImageTags, PastedImage} from "./transcript-images";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
@@ -312,6 +313,7 @@ const DEFAULT_SETTINGS: TerminalSettings = {
 const sessions = new Map<string, Session>();
 let activeSessionId: string | null = null;
 let sessionModalId: string | null = null;
+let imagePreviewSessionId: string | null = null;
 let projects: Project[] = [];
 let runtime: Record<string, SessionRuntime> = {};
 let syncWarnings: string[] = [];
@@ -901,6 +903,7 @@ function createTerminalUI(sessionId: string) {
   // keeps its 80x30 spawn size while the terminal shows 80x24.
 
   stickyPrompts.set(sessionId, createStickyPrompt(sessionId, term));
+  if (sessions.get(sessionId)?.config.codingAgent === "claude") registerImageLinks(sessionId, term);
 
   term.onData((data) => {
     ipcRenderer.send("session-input", sessionId, data);
@@ -915,6 +918,72 @@ function createTerminalUI(sessionId: string) {
 
   return { terminal: term, fitAddon, element: sessionElement };
 }
+
+// [Image #N] in a Claude terminal opens a preview when clicked
+function registerImageLinks(sessionId: string, term: Terminal) {
+  term.registerLinkProvider({
+    provideLinks(y, callback) {
+      const line = term.buffer.active.getLine(y - 1);
+      if (!line) return callback(undefined);
+      // A wide character fills two cells, so a text index is not always its column
+      let text = "";
+      const columns: number[] = [];
+      for (let x = 0; x < line.length; x++) {
+        const cell = line.getCell(x);
+        if (!cell || cell.getWidth() === 0) continue;
+        const chars = cell.getChars() || " ";
+        text += chars;
+        for (let i = 0; i < chars.length; i++) columns.push(x);
+      }
+      callback(findImageTags(text).map(tag => ({
+        text: text.slice(tag.start, tag.end),
+        range: {start: {x: columns[tag.start] + 1, y}, end: {x: columns[tag.end - 1] + 1, y}},
+        activate: () => { void openImagePreview(sessionId, tag.id); },
+      })));
+    },
+  });
+}
+
+async function openImagePreview(sessionId: string, imageId: number) {
+  try {
+    const result = await ipcRenderer.invoke("get-session-image", sessionId, imageId) as
+      { ok: true; image: PastedImage } | { ok: false; error: string };
+    if (!result.ok) {
+      showToast(result.error, "warning");
+      return;
+    }
+    const img = document.getElementById("image-preview") as HTMLImageElement | null;
+    if (!img) return;
+    img.src = `data:${result.image.mediaType};base64,${result.image.data}`;
+    img.alt = `Image #${imageId}`;
+    const title = document.getElementById("image-preview-title");
+    if (title) title.textContent = `Image #${imageId}`;
+    imagePreviewSessionId = sessionId;
+    document.getElementById("image-preview-modal")?.classList.remove("hidden");
+  } catch (error) {
+    showToast(`get-session-image failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
+function closeImagePreview() {
+  if (imagePreviewSessionId === null) return;
+  sessions.get(imagePreviewSessionId)?.terminal?.focus();
+  imagePreviewSessionId = null;
+  document.getElementById("image-preview-modal")?.classList.add("hidden");
+  document.getElementById("image-preview")?.removeAttribute("src");
+}
+
+document.getElementById("image-preview-close")?.addEventListener("click", closeImagePreview);
+document.getElementById("image-preview-modal")?.addEventListener("mousedown", (e) => {
+  if (e.target === e.currentTarget) closeImagePreview();
+});
+// Capture phase: the terminal keeps the focus, and this Escape is not meant for its agent
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || imagePreviewSessionId === null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  closeImagePreview();
+}, true);
 
 function addSession(persistedSession: PersistedSession, hasActivePty: boolean, render = true) {
   const session: Session = {

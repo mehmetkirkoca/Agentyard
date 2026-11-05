@@ -1554,6 +1554,23 @@ body {
     min-height: 0;
   }
 
+  .image-preview-modal {
+    height: auto;
+    max-height: 85vh;
+  }
+
+  .image-preview-body {
+    @apply flex items-center justify-center overflow-auto;
+    min-height: 0;
+    padding: 8px;
+  }
+
+  .image-preview-body img {
+    max-width: 100%;
+    max-height: calc(85vh - 60px);
+    object-fit: contain;
+  }
+
   .form-group {
     margin-bottom: 12px;
   }
