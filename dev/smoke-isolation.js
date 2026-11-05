@@ -180,7 +180,9 @@ function hasXvfbRun() {
 }
 
 function displayCommand(binary, args) {
-  if (hasXvfbRun()) return ["xvfb-run", ["-a", "-s", "-screen 0 1400x900x24", binary, ...args]];
+  // In a Wayland session Electron picks Wayland and ignores xvfb-run's DISPLAY: the window lands on the
+  // real desktop, whose compositor sends no frames while the screen is locked, and xterm draws in rAF
+  if (hasXvfbRun()) return ["xvfb-run", ["-a", "-s", "-screen 0 1400x900x24", binary, "--ozone-platform=x11", ...args]];
   if (process.platform === "linux") console.warn("smoke-isolation: xvfb-run not found, using the current display");
   return [binary, args];
 }
@@ -545,6 +547,8 @@ async function run(results, {packaged, home, tempRoot}) {
 
     await checkIsolation(first.cdp, results, home);
     await checkSeededData(first.cdp, results, entries);
+    // xterm draws in requestAnimationFrame: without frames PTY output arrives but never reaches the DOM
+    results.check("the page gets animation frames", await first.cdp.evaluate(`new Promise(r => { requestAnimationFrame(() => r(true)); setTimeout(() => r(false), 2000); })`));
     created = await checkNewSession(first.cdp, results, home);
 
     if (packaged) {
