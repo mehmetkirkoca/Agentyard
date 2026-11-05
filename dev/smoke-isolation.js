@@ -476,6 +476,38 @@ async function checkNewSession(cdp, results, home) {
   return created;
 }
 
+// A reload re-runs the preload and the renderer while the PTY lives on in main: IPC, the preload API,
+// the terminal and the keyboard path must all work again, with real output as the evidence.
+async function checkReload(cdp, results, home, created) {
+  const log = () => { try { return fs.readFileSync(path.join(home, STUB_LOG), "utf8"); } catch { return ""; } };
+  await cdp.send("Page.reload");
+  await waitFor(() => cdp.evaluate(`!!document.querySelector(".sidebar") && !!window.agentyard`), "the page after reload");
+  results.check("preload API is present after reload", await cdp.evaluate(`typeof window.agentyard.invoke === "function"`));
+  const sessions = await cdp.evaluate(`window.agentyard.invoke("get-all-sessions")`);
+  results.check("invoke works after reload", Array.isArray(sessions) && sessions.some(s => s.id === created.id), sessions.map?.(s => s.id));
+
+  // The new xterm starts empty (the PTY's earlier output is not replayed), so "drawn" means: the
+  // session's tab is back and selecting it shows a visible terminal with rows
+  const tabSelector = JSON.stringify(`#tabs .tab[data-session-id="${created.id}"]`);
+  await waitFor(() => cdp.evaluate(`!!document.querySelector(${tabSelector})`), "the session's tab after reload", 30000);
+  await cdp.evaluate(`document.querySelector(${tabSelector}).click(); 1`);
+  const visibleTerminal = `(() => {
+    for (const el of document.querySelectorAll(".xterm")) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && el.querySelectorAll(".xterm-rows > div").length > 0) return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+    }
+    return null;
+  })()`;
+  const pos = await waitFor(() => cdp.evaluate(visibleTerminal), "a visible terminal with rows after reload", 30000);
+  results.check("the session's terminal is drawn again after reload", !!pos, pos);
+  await cdp.send("Input.dispatchMouseEvent", {type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1});
+  await cdp.send("Input.dispatchMouseEvent", {type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1});
+  await cdp.send("Input.insertText", {text: "smoke-after-reload"});
+  await waitFor(() => log().includes("smoke-after-reload"), "typed input in the PTY after reload");
+  await waitFor(() => cdp.evaluate(`${textOfTerminals}.includes("smoke-after-reload")`), "the echo of the post-reload input in xterm");
+  results.check("typed input reaches the PTY and its echo is drawn after reload", true);
+}
+
 function checkRejections(app, results, expectRogue) {
   const lines = app.output.split("\n").filter(l => l.includes("Rejected IPC"));
   const unexpected = lines.filter(l => !expectRogue || !l.includes("rogue.html"));
@@ -535,6 +567,10 @@ async function run(results, {packaged, home, tempRoot}) {
     launchSpec = {binary: electronBinary, args: ["-r", __filename, "--no-sandbox", "--remote-debugging-port=0", REPO]};
   }
   const env = childEnv(home, {SMOKE_ROGUE_PAGE: roguePage, SMOKE_PROBE_PRELOAD: probePreload});
+  // Both launch specs pass --no-sandbox (chrome-sandbox is not SUID here), so the OS layer is never exercised
+  if (launchSpec.args.includes("--no-sandbox")) {
+    results.skip(`OS sandbox layer of sandbox: true (${packaged ? "packaged" : "checkout"})`, "--no-sandbox is used; only the JS layer (no Node in the page or the preload) is checked");
+  }
 
   console.log(`--- First start (${packaged ? "packaged" : "checkout"}): saved data, isolation, UI`);
   let created;
@@ -550,6 +586,7 @@ async function run(results, {packaged, home, tempRoot}) {
     // xterm draws in requestAnimationFrame: without frames PTY output arrives but never reaches the DOM
     results.check("the page gets animation frames", await first.cdp.evaluate(`new Promise(r => { requestAnimationFrame(() => r(true)); setTimeout(() => r(false), 2000); })`));
     created = await checkNewSession(first.cdp, results, home);
+    await checkReload(first.cdp, results, home, created);
 
     if (packaged) {
       results.skip("rejected sender and preload probe in the packaged binary", "a packaged binary takes no -r, so no second window can be opened from outside; both run in the checkout run, and the same code path accepted the asar URL here");

@@ -5105,9 +5105,9 @@ async function loadHomeWorktreeDir() {
 
 // Load saved settings on startup
 async function loadSettings() {
-  // The default worktree dir needs the home dir (main process); a saved value still wins below
-  await loadHomeWorktreeDir();
-  const savedSettings = await window.agentyard.invoke("get-terminal-settings");
+  // The default worktree dir needs the home dir (main process); both requests go out together and
+  // the merge below runs only after both, so a saved value still wins
+  const [, savedSettings] = await Promise.all([loadHomeWorktreeDir(), window.agentyard.invoke("get-terminal-settings")]);
   if (savedSettings) {
     terminalSettings = { ...DEFAULT_SETTINGS, ...savedSettings };
   }

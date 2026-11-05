@@ -1,4 +1,4 @@
-import {assertDirectoryInProjects, assertMcpConfig, isKnownSessionId} from "./ipc-validation";
+import {assertMcpConfig, checkInputArgs, isKnownSessionId} from "./ipc-validation";
 
 describe("isKnownSessionId", () => {
   const ids = new Set(["session-1", "session-2"]);
@@ -24,41 +24,23 @@ describe("isKnownSessionId", () => {
   });
 });
 
-describe("assertDirectoryInProjects", () => {
-  const dirs = ["/a/b", "/work/app"];
+describe("checkInputArgs", () => {
+  const ids = new Set(["session-1"]);
 
-  it("returns the normalized registered directory", () => {
-    expect(assertDirectoryInProjects("/a/b", dirs)).toBe("/a/b");
+  it("is ok for a known session and string data", () => {
+    expect(checkInputArgs("session-1", "ls\r", ids)).toBe("ok");
+    expect(checkInputArgs("session-1", "", ids)).toBe("ok");
   });
 
-  it("ignores a trailing slash on either side", () => {
-    expect(assertDirectoryInProjects("/a/b/", dirs)).toBe("/a/b");
-    expect(assertDirectoryInProjects("/work/app", ["/work/app/"])).toBe("/work/app");
+  it("is unknown for an id that is not in the set, even with bad data", () => {
+    expect(checkInputArgs("gone", "x", ids)).toBe("unknown-session");
+    expect(checkInputArgs("gone", 5, ids)).toBe("unknown-session");
+    expect(checkInputArgs(undefined, "x", ids)).toBe("unknown-session");
   });
 
-  it("rejects a sibling that only shares the prefix", () => {
-    expect(() => assertDirectoryInProjects("/a/b-kotu", dirs)).toThrow(/not in any project/);
-  });
-
-  it("rejects a path that escapes with ..", () => {
-    expect(() => assertDirectoryInProjects("/a/b/../c", dirs)).toThrow(/not in any project/);
-  });
-
-  it("accepts a path that resolves back to a registered directory", () => {
-    expect(assertDirectoryInProjects("/a/c/../b", dirs)).toBe("/a/b");
-  });
-
-  it("rejects a subdirectory of a project", () => {
-    expect(() => assertDirectoryInProjects("/a/b/sub", dirs)).toThrow(/not in any project/);
-  });
-
-  it("rejects a directory when no project has one", () => {
-    expect(() => assertDirectoryInProjects("/a/b", [])).toThrow(/not in any project/);
-  });
-
-  it("rejects values that are not non-empty absolute path strings", () => {
-    for (const value of [undefined, null, 5, {}, "", "relative/dir"]) {
-      expect(() => assertDirectoryInProjects(value, dirs)).toThrow(/absolute path/);
+  it("is bad-data for a known session with non-string data", () => {
+    for (const value of [undefined, null, 1, {}, ["x"]]) {
+      expect(checkInputArgs("session-1", value, ids)).toBe("bad-data");
     }
   });
 });

@@ -20,7 +20,7 @@ import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
 import {addWorktree, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
 import {createTrustedIpc, hardenNavigation} from "./window-security";
-import {assertDirectoryInProjects, assertMcpConfig, isKnownSessionId} from "./ipc-validation";
+import {assertMcpConfig, checkInputArgs, isKnownSessionId} from "./ipc-validation";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
 import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
@@ -1197,9 +1197,12 @@ trustedIpc.on("create-session", async (event, request: SessionConfig & {projectI
 // Handle session input
 trustedIpc.on("session-input", (_event, sessionId: string, data: string) => {
   // The live PTY map is the source of truth: a created or reopened session is in it before the
-  // renderer is told, so only sessions without a PTY (or non-string data) are refused.
-  if (typeof data !== "string" || !isKnownSessionId(sessionId, activePtyProcesses)) {
-    console.error("Ignoring session-input for an unknown session or non-string data");
+  // renderer is told. An unknown session stays silent (a dead PTY's visible terminal sends a
+  // keystroke per event); non-string data is logged.
+  const check = checkInputArgs(sessionId, data, activePtyProcesses);
+  if (check === "unknown-session") return;
+  if (check === "bad-data") {
+    console.error(`Ignoring session-input for session ${sessionId}: data is not a string`);
     return;
   }
   const ptyProcess = activePtyProcesses.get(sessionId);
@@ -1301,8 +1304,11 @@ trustedIpc.handle("open-in-editor", async (_event, sessionId: string): Promise<{
 });
 
 trustedIpc.on("side-shell-input", (_event, sessionId: string, data: string) => {
-  if (typeof data !== "string" || !isKnownSessionId(sessionId, sideShellPtys)) {
-    console.error("Ignoring side-shell-input for an unknown side shell or non-string data");
+  // Unknown side shell stays silent (keystroke rate); non-string data is logged
+  const check = checkInputArgs(sessionId, data, sideShellPtys);
+  if (check === "unknown-session") return;
+  if (check === "bad-data") {
+    console.error(`Ignoring side-shell-input for session ${sessionId}: data is not a string`);
     return;
   }
   sideShellPtys.get(sessionId)?.write(data);
@@ -1876,8 +1882,8 @@ trustedIpc.handle("apply-session-to-project", async (_event, sessionId: string) 
       return { success: false, error: "Session missing worktree path or parent branch" };
     }
 
-    // The patch is applied here: it must be a registered project directory (a throw reaches the catch below)
-    const projectDir = assertDirectoryInProjects(session.config.projectDir, getProjects().flatMap(p => p.dirs));
+    // No project-membership check: a worktree session whose directory left its project can still apply
+    const projectDir = session.config.projectDir;
     const worktreePath = session.worktreePath;
     const parentBranch = session.config.parentBranch;
     const patchFilename = `agentyard-patch-${Date.now()}.patch`;
