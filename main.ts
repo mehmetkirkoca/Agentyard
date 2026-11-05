@@ -952,6 +952,26 @@ ipcMain.handle("save-clipboard-image", (_event, sessionId: string): { ok: true; 
   }
 });
 
+// The renderer has no clipboard of its own (no Node/Electron modules): it goes through main
+ipcMain.handle("clipboard-read-text", (): string => {
+  try {
+    return clipboard.readText();
+  } catch (error) {
+    console.error("Error reading clipboard text:", error);
+    return "";
+  }
+});
+
+ipcMain.handle("clipboard-write-text", (_event, text: string): void => {
+  try {
+    clipboard.writeText(String(text));
+  } catch (error) {
+    console.error("Error writing clipboard text:", error);
+  }
+});
+
+ipcMain.handle("get-home-dir", (): string => os.homedir());
+
 // Get git branches from directory
 ipcMain.handle("get-branches", async (_event, dirPath: string) => {
   return getBranches(dirPath);
@@ -2173,6 +2193,8 @@ const createWindow = () => {
     // puts them on the left. Moving the window stays with the compositor (-webkit-app-region: drag).
     frame: false,
     webPreferences: {
+      // tsc output until the preload is bundled (Task 4)
+      preload: path.join(__dirname, "preload.js"),
       nodeIntegration: true,
       contextIsolation: false,
     },
