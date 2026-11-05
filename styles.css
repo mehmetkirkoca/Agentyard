@@ -281,6 +281,14 @@ body {
     height: 7px;
     background-color: #4d4d4d;
     transition: background-color 0.2s;
+    position: relative;
+  }
+
+  /* The dot is 7px: a wider hover area makes its hint easy to reach */
+  .session-indicator::before {
+    content: "";
+    position: absolute;
+    inset: -4px;
   }
 
   .session-indicator.active {
@@ -301,7 +309,7 @@ body {
   }
 
   .session-indicator.status-idle {
-    background-color: var(--vsc-fg-muted);
+    background-color: #d4d4d4;
   }
 
   .session-indicator.status-closed {

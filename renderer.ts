@@ -997,7 +997,16 @@ function activateSession(sessionId: string) {
   switchToSession(sessionId);
 }
 
-const STATUS_CLASSES = ["status-running", "status-waiting", "status-done", "status-idle", "status-closed", "status-external"];
+// Shown when hovering a session's status dot
+const STATUS_HINTS: Record<string, string> = {
+  "status-running": "Running: the agent is working",
+  "status-waiting": "Waiting: the agent needs your input or approval",
+  "status-done": "Done: finished, not viewed yet",
+  "status-idle": "Idle: open, nothing is running",
+  "status-closed": "Closed: no terminal is open",
+  "status-external": "Open elsewhere: running outside Agentyard",
+};
+const STATUS_CLASSES = Object.keys(STATUS_HINTS);
 
 function indicatorStatusClass(session: Session): string {
   if (runtime[session.id]?.externallyOpen) return "status-external";
@@ -1013,8 +1022,10 @@ function refreshSessionIndicator(sessionId: string, root?: HTMLElement) {
   const row = root ?? document.getElementById(`sidebar-${sessionId}`);
   const indicator = row?.querySelector(".session-indicator");
   if (!session || !indicator) return;
+  const statusClass = indicatorStatusClass(session);
   indicator.classList.remove(...STATUS_CLASSES);
-  indicator.classList.add(indicatorStatusClass(session));
+  indicator.classList.add(statusClass);
+  (indicator as HTMLElement).title = STATUS_HINTS[statusClass] ?? "";
 }
 
 // Claude Code and Gemini CLI report their state through hooks (status dots); other agents are
