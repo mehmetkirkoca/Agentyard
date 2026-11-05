@@ -1,4 +1,3 @@
-import {createHash} from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import {hardenNavigation} from "./window-security";
@@ -41,9 +40,11 @@ describe("index.html Content-Security-Policy", () => {
     expect(directive("default-src")).toBe("default-src 'none'");
   });
 
-  it("allows only the page's own inline bootstrap script, by hash", () => {
-    const inline = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? "";
-    const hash = createHash("sha256").update(inline).digest("base64");
-    expect(directive("script-src")).toBe(`script-src 'sha256-${hash}'`);
+  it("allows only scripts from the page's own origin", () => {
+    expect(directive("script-src")).toBe("script-src 'self'");
+  });
+
+  it("keeps no inline script in the page", () => {
+    expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/);
   });
 });

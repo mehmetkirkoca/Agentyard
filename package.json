@@ -6,7 +6,8 @@
   "scripts": {
     "build:css": "tailwindcss -i styles.css -o dist/styles.css",
     "build:ts": "tsc",
-    "build": "npm run build:css && npm run build:ts",
+    "build:bundle": "esbuild renderer.ts --bundle --platform=browser --outfile=dist/renderer.bundle.js && esbuild preload.ts --bundle --platform=node --external:electron --outfile=dist/preload.js",
+    "build": "npm run build:css && npm run build:ts && npm run build:bundle",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
@@ -37,6 +38,7 @@
     "autoprefixer": "^10.4.21",
     "electron": "^42.11.18",
     "electron-builder": "^26.0.12",
+    "esbuild": "^0.28.2",
     "jest": "^30.2.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
