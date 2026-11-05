@@ -7,7 +7,7 @@ import {mcpServerDetailsHtml} from "./mcp-utils";
 import {findImageTags, PastedImage} from "./transcript-images";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
-import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, moveProjectInOrder} from "./sidebar-model";
+import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, formatAge, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey, resyncViewport} from "./terminal-utils";
 import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-launch";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
@@ -1402,6 +1402,80 @@ function createGroupSearchBox(pid: string): HTMLElement {
   row.appendChild(input);
   return row;
 }
+
+// Hover card of a sidebar session: what it is about now, without opening it
+const SESSION_PREVIEW_DELAY_MS = 400;
+let previewRowId: string | null = null;
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+
+function fillSessionPreview(card: HTMLElement, meta: PersistedSession, name: string) {
+  const line = (className: string, text: string) => {
+    const el = document.createElement("div");
+    el.className = className;
+    el.textContent = text;
+    card.appendChild(el);
+  };
+  const now = Date.now();
+  card.replaceChildren();
+  line("session-preview-name", name);
+  if (meta.lastSummary) {
+    const age = meta.lastSummaryAt ? ` · ${formatAge(meta.lastSummaryAt, now)}` : "";
+    line("session-preview-label", `Last summary${age}`);
+    line("session-preview-text", meta.lastSummary);
+  }
+  if (meta.lastPrompt) {
+    line("session-preview-label", "Last prompt");
+    line("session-preview-text", meta.lastPrompt);
+  }
+  const dir = meta.worktreePath || meta.linkedDir || meta.config.projectDir;
+  const activity = meta.lastActivity ? `Active ${formatAge(meta.lastActivity, now)}` : "";
+  line("session-preview-footer", [activity, dir].filter(Boolean).join(" · "));
+}
+
+function showSessionPreview(sessionId: string) {
+  const session = sessions.get(sessionId);
+  const row = document.getElementById(`sidebar-${sessionId}`);
+  const card = document.getElementById("session-preview");
+  if (!session || !row || !card) return;
+  if (!session.meta.lastPrompt && !session.meta.lastSummary) return;
+  // A rename or an open menu needs the row's attention
+  if (row.querySelector(".session-name-input:not(.hidden), .session-menu:not(.hidden)")) return;
+  fillSessionPreview(card, session.meta, session.name);
+  card.classList.remove("hidden");
+  const rowBox = row.getBoundingClientRect();
+  const sidebarBox = document.querySelector(".sidebar")!.getBoundingClientRect();
+  const maxTop = window.innerHeight - card.offsetHeight - 8;
+  card.style.left = `${sidebarBox.right + 8}px`;
+  card.style.top = `${Math.max(8, Math.min(rowBox.top, maxTop))}px`;
+}
+
+function hideSessionPreview() {
+  clearTimeout(previewTimer);
+  document.getElementById("session-preview")?.classList.add("hidden");
+}
+
+// Delegated: the sidebar rebuilds its rows, and a removed row never fires mouseleave
+(function initSessionPreview() {
+  const sidebar = document.querySelector(".sidebar");
+  if (!sidebar) return;
+  sidebar.addEventListener("mouseover", (e) => {
+    const row = (e.target as HTMLElement).closest?.(".session-list-item");
+    const id = row?.id.startsWith("sidebar-") ? row.id.slice("sidebar-".length) : null;
+    if (id === previewRowId) return;
+    hideSessionPreview();
+    previewRowId = id;
+    if (id) previewTimer = setTimeout(() => showSessionPreview(id), SESSION_PREVIEW_DELAY_MS);
+  });
+  sidebar.addEventListener("mouseleave", () => {
+    hideSessionPreview();
+    previewRowId = null;
+  });
+  // previewRowId stays: after a click the card returns only on another row
+  sidebar.addEventListener("mousedown", hideSessionPreview);
+  sidebar.addEventListener("dragstart", hideSessionPreview);
+  sidebar.addEventListener("scroll", hideSessionPreview, true);
+  window.addEventListener("blur", hideSessionPreview);
+})();
 
 function restoreSearchFocus() {
   if (!searchFocus) return;

@@ -153,6 +153,9 @@ function newSession(entry: Entry, meta: TranscriptMeta, number: number): Persist
     manualName: false,
     lastActivity: meta.mtimeMs,
     linkedDir: entry.dir,
+    lastPrompt: meta.lastPrompt,
+    lastSummary: meta.lastSummary,
+    lastSummaryAt: meta.lastSummaryAt,
   };
 }
 
@@ -171,6 +174,15 @@ function updateSession(session: PersistedSession, meta: TranscriptMeta): Persist
   const lastActivity = Math.max(session.lastActivity ?? 0, meta.mtimeMs);
   if (lastActivity !== session.lastActivity) {
     next.lastActivity = lastActivity;
+    changed = true;
+  }
+  if (meta.lastPrompt !== session.lastPrompt) {
+    next.lastPrompt = meta.lastPrompt;
+    changed = true;
+  }
+  if (meta.lastSummary !== session.lastSummary || meta.lastSummaryAt !== session.lastSummaryAt) {
+    next.lastSummary = meta.lastSummary;
+    next.lastSummaryAt = meta.lastSummaryAt;
     changed = true;
   }
   return changed ? next : null;

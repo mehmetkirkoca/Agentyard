@@ -1554,6 +1554,48 @@ body {
     min-height: 0;
   }
 
+  /* Hover card of a sidebar session; under the modals */
+  .session-preview {
+    @apply fixed z-40 pointer-events-none;
+    width: 360px;
+    padding: 10px 12px;
+    background-color: var(--vsc-widget);
+    border: 1px solid var(--vsc-widget-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    color: var(--vsc-fg);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .session-preview-name {
+    @apply font-semibold;
+    color: var(--vsc-fg-strong);
+    overflow-wrap: anywhere;
+  }
+
+  .session-preview-label {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .session-preview-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 6;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .session-preview-footer {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+    overflow-wrap: anywhere;
+  }
+
   .image-preview-modal {
     height: auto;
     max-height: 85vh;

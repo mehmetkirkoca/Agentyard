@@ -110,6 +110,22 @@ describe("runSyncTick", () => {
     expect(fs.readFileSync(path.join(central, `${U1}.jsonl`), "utf8")).toBe(titled("Fix the login bug"));
   });
 
+  it("keeps a session's last prompt and summary current", () => {
+    const summary = line({ type: "system", subtype: "away_summary", content: "done so far", timestamp: "2026-10-30T10:00:00.000Z" });
+    const file = writeTranscript(folderA, U1, titled("t") + summary);
+    const input = makeInput();
+    const first = runSyncTick(input);
+    const imported = first.sessions[0];
+    expect(imported.lastPrompt).toBe("hello there");
+    expect(imported.lastSummary).toBe("done so far");
+    expect(imported.lastSummaryAt).toBe(Date.parse("2026-10-30T10:00:00.000Z"));
+
+    fs.appendFileSync(fs.existsSync(file) ? file : path.join(central, `${U1}.jsonl`), line({ type: "user", message: { content: "next step" } }));
+    const second = runSyncTick({ ...input, sessions: first.sessions });
+    expect(second.changed).toBe(true);
+    expect(second.sessions[0].lastPrompt).toBe("next step");
+  });
+
   it("falls back to Session <n> when the transcript has no title", () => {
     writeTranscript(folderA, U1, "");
 

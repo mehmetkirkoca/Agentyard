@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import {promptText} from "./prompt-history";
 
 export interface TranscriptMeta {
   uuid: string;
@@ -8,9 +9,13 @@ export interface TranscriptMeta {
   customTitle?: string;
   aiTitle?: string;
   firstPrompt?: string;
+  lastPrompt?: string;
+  lastSummary?: string;
+  lastSummaryAt?: number;
 }
 
 const MAX_TITLE_LENGTH = 60;
+const MAX_PREVIEW_LENGTH = 1000;
 
 /**
  * Fold parsed transcript lines into the metadata. Unparseable lines are skipped.
@@ -35,6 +40,14 @@ export function applyTranscriptLines(meta: TranscriptMeta, lines: string[]): Tra
       if (typeof content === "string" && !content.startsWith("<")) {
         next.firstPrompt = content;
       }
+    }
+    if (entry.type === "system" && entry.subtype === "away_summary" && typeof entry.content === "string") {
+      next.lastSummary = entry.content.slice(0, MAX_PREVIEW_LENGTH);
+      const at = Date.parse(entry.timestamp);
+      next.lastSummaryAt = Number.isNaN(at) ? undefined : at;
+    } else if (!entry.isCompactSummary && !entry.isSidechain) {
+      const prompt = promptText(entry);
+      if (prompt) next.lastPrompt = prompt.slice(0, MAX_PREVIEW_LENGTH);
     }
   }
   return next;

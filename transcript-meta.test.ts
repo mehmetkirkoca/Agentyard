@@ -11,6 +11,47 @@ import {
 const empty = (): TranscriptMeta => ({ uuid: "u", size: 0, mtimeMs: 0 });
 
 describe("applyTranscriptLines", () => {
+  const user = (content: unknown, extra: object = {}) => JSON.stringify({type: "user", message: {role: "user", content}, ...extra});
+
+  it("keeps the latest prompt, across string and block content", () => {
+    const meta = applyTranscriptLines(empty(), [
+      user("first"),
+      user([{type: "text", text: "[Image #1] second"}, {type: "image"}]),
+    ]);
+    expect(meta.lastPrompt).toBe("[Image #1] second");
+  });
+
+  it("does not take injected entries as the last prompt", () => {
+    const meta = applyTranscriptLines(empty(), [
+      user("real"),
+      user([{type: "text", text: "[Image: source: /a.png]"}], {isMeta: true}),
+      user("This session is being continued", {isCompactSummary: true}),
+      user("from a subagent", {isSidechain: true}),
+      user([{type: "tool_result", content: "x"}]),
+      user("<command-name>/clear</command-name>"),
+    ]);
+    expect(meta.lastPrompt).toBe("real");
+  });
+
+  it("keeps the latest away summary with its time", () => {
+    const summary = (content: string, timestamp: string) => JSON.stringify({type: "system", subtype: "away_summary", content, timestamp});
+    const meta = applyTranscriptLines(empty(), [
+      summary("old", "2026-11-01T10:00:00.000Z"),
+      summary("new", "2026-11-02T10:00:00.000Z"),
+    ]);
+    expect(meta.lastSummary).toBe("new");
+    expect(meta.lastSummaryAt).toBe(Date.parse("2026-11-02T10:00:00.000Z"));
+  });
+
+  it("ignores other system entries and caps long texts", () => {
+    const meta = applyTranscriptLines(empty(), [
+      JSON.stringify({type: "system", subtype: "other", content: "x"}),
+      user("a".repeat(1500)),
+    ]);
+    expect(meta.lastSummary).toBeUndefined();
+    expect(meta.lastPrompt).toHaveLength(1000);
+  });
+
   it("custom-title overrides ai-title", () => {
     const meta = applyTranscriptLines(empty(), [
       JSON.stringify({ type: "custom-title", customTitle: "Mine" }),

@@ -11,7 +11,7 @@ export interface PromptHistory {
 }
 
 /** Text the user typed, or undefined for tool results, meta entries and system-injected messages. */
-function promptText(entry: any): string | undefined {
+export function promptText(entry: any): string | undefined {
   if (entry?.type !== "user" || entry.isMeta) return undefined;
   const content = entry.message?.content;
   let text: string | undefined;

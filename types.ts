@@ -53,6 +53,10 @@ export interface PersistedSession {
   forkedPromptCount?: number;
   /** Listed under the group's "Archive" until unarchived by hand, even while it runs */
   archived?: boolean;
+  /** Claude: what the session is about now, read from its transcript (hover card, sidebar filter) */
+  lastPrompt?: string;
+  lastSummary?: string;
+  lastSummaryAt?: number;
 }
 
 export interface SessionRuntime {

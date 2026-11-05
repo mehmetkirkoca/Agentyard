@@ -88,13 +88,24 @@ function searchKey(text: string): string {
 }
 
 /**
- * Sidebar search inside one group: keep sessions whose name contains the query
- * (case-insensitive, Turkish casing). Matches from "Older" and "Archive" are listed inline so
+ * Sidebar search inside one group: keep sessions whose name, last prompt or last summary contains
+ * the query (case-insensitive, Turkish casing). Matches from "Older" and "Archive" are listed inline so
  * they are visible without expanding it. The waiting counter stays the group's.
  */
 export function filterSidebarGroup(group: SidebarGroup, query: string): SidebarGroup {
   const q = searchKey(query.trim());
   if (!q) return group;
-  const matches = (session: PersistedSession) => searchKey(session.name).includes(q);
+  const matches = (session: PersistedSession) =>
+    [session.name, session.lastPrompt, session.lastSummary].some(text => text && searchKey(text).includes(q));
   return {...group, recent: [...group.recent, ...group.older, ...group.archived].filter(matches), older: [], archived: []};
+}
+
+/** "just now", "5m ago", "3h ago", "2d ago" */
+export function formatAge(timestamp: number, now: number): string {
+  const minutes = Math.floor((now - timestamp) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }

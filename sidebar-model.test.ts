@@ -1,4 +1,4 @@
-import { buildSidebar, buildStandaloneGroup, filterSidebarGroup, moveProjectInOrder } from "./sidebar-model";
+import { buildSidebar, buildStandaloneGroup, filterSidebarGroup, formatAge, moveProjectInOrder } from "./sidebar-model";
 import { STANDALONE_PROJECT_ID } from "./project-model";
 import { PersistedSession, Project, SessionStatus, SessionType } from "./types";
 
@@ -118,6 +118,15 @@ describe("filterSidebarGroup", () => {
     expect(filterSidebarGroup(group, "e").recent.map(x => x.id)).toEqual(["a", "b", "d"]);
   });
 
+  it("also matches the last prompt and the last summary", () => {
+    const g = {
+      project, waitingCount: 0, older: [], archived: [],
+      recent: [s("a", { name: "Eski isim", lastPrompt: "Ödeme hatasını düzelt" }), s("b", { name: "Başka", lastSummary: "Sitemap BİTTİ" }), s("c", { name: "Üçüncü" })],
+    };
+    expect(filterSidebarGroup(g, "ödeme").recent.map(x => x.id)).toEqual(["a"]);
+    expect(filterSidebarGroup(g, "bitti").recent.map(x => x.id)).toEqual(["b"]);
+  });
+
   it("keeps the waiting counter of the whole group", () => {
     expect(filterSidebarGroup(group, "zzz")).toEqual({ ...group, recent: [], older: [], archived: [] });
   });
@@ -184,5 +193,22 @@ describe("archived sessions", () => {
     const standalone: Project = {id: STANDALONE_PROJECT_ID, name: "Sessions", dirs: []};
     const group = buildStandaloneGroup([standalone], [s("a", {archived: true, projectId: STANDALONE_PROJECT_ID})], NOW);
     expect(group?.archived.map(x => x.id)).toEqual(["a"]);
+  });
+});
+
+describe("formatAge", () => {
+  const minute = 60 * 1000;
+  it.each([
+    [30 * 1000, "just now"],
+    [minute, "1m ago"],
+    [59 * minute, "59m ago"],
+    [60 * minute, "1h ago"],
+    [24 * 60 * minute, "1d ago"],
+  ])("formats %d ms", (age, text) => {
+    expect(formatAge(NOW - age, NOW)).toBe(text);
+  });
+
+  it("treats a timestamp in the future as just now", () => {
+    expect(formatAge(NOW + minute, NOW)).toBe("just now");
   });
 });
