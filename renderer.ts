@@ -2056,10 +2056,20 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
     const branchEl = document.createElement("span");
     branchEl.className = "breadcrumb-branch";
     branchEl.textContent = `⎇ ${branch}`;
-    branchEl.title = branch;
+    branchEl.title = `${branch} — click to copy`;
+    branchEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      copyWithToast(branch);
+    });
     nodes.push(branchEl);
   }
   crumb.replaceChildren(...nodes);
+}
+
+function copyWithToast(text: string) {
+  window.agentyard.invoke("clipboard-write-text", text)
+    .then(() => showToast(`Copied ${text}`, "info"))
+    .catch((error) => showToast(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error"));
 }
 
 async function openInEditor(sessionId: string) {
@@ -2591,11 +2601,7 @@ function openTabContextMenu(sessionId: string, x: number, y: number) {
     "separator",
     {label: "Rename…", run: () => startEditingTabName(sessionId)},
     {label: "Fork", run: () => window.agentyard.send("fork-session", sessionId), disabled: !canFork(session.config)},
-    {label: "Copy Directory Path", run: () => {
-      window.agentyard.invoke("clipboard-write-text", dir)
-        .then(() => showToast(`Copied ${dir}`, "info"))
-        .catch((error) => showToast(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error"));
-    }, disabled: !dir},
+    {label: "Copy Directory Path", run: () => copyWithToast(dir), disabled: !dir},
   ]);
 }
 

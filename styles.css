@@ -565,7 +565,11 @@ body {
     flex: 0 4 auto;
     margin-left: 8px;
     color: var(--vsc-fg-dim);
-    cursor: default;
+    cursor: pointer;
+  }
+
+  .breadcrumb-branch:hover {
+    color: var(--vsc-fg-strong);
   }
 
   .dir-picker {
