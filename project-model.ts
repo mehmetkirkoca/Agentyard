@@ -1,6 +1,8 @@
 import * as path from "path";
-import { ClaudeProcess } from "./process-scan";
+import type { ClaudeProcess } from "./process-scan";
 import { PersistedSession, Project, SessionType } from "./types";
+import { isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME } from "./project-constants";
+export * from "./project-constants";
 
 export type Occupancy =
   | { kind: "free" }
@@ -115,15 +117,6 @@ export function firstFreeDir(dirs: string[], occ: Record<string, Occupancy>): st
 
 export function normalizeDirs(dirs: string[]): string[] {
   return [...new Set(dirs.map(d => path.resolve(d)))];
-}
-
-// Built-in project holding the project-independent sessions shown in the SESSIONS section.
-export const STANDALONE_PROJECT_ID = "__standalone__";
-export const STANDALONE_PROJECT_NAME = "Others";
-
-export function isStandaloneProject(project: Pick<Project, "id"> | string | undefined): boolean {
-  const id = typeof project === "string" ? project : project?.id;
-  return id === STANDALONE_PROJECT_ID;
 }
 
 export function standaloneScratchDir(home: string): string {

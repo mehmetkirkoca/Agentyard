@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-vnPdNO1WcbdH7Zy71KZ0EUoWyPPepXOIZseIGp/ko0g='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; base-uri 'none'; form-action 'none'" />
     <title>Agentyard Terminal</title>
     <link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
     <link rel="stylesheet" href="dist/styles.css" />
@@ -433,8 +433,6 @@
       </div>
     </div>
 
-    <script>
-      require('./dist/renderer.js');
-    </script>
+    <script src="dist/renderer.bundle.js"></script>
   </body>
 </html>

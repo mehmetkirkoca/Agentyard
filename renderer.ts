@@ -1,18 +1,18 @@
 import {FitAddon} from "@xterm/addon-fit";
-import {clipboard, ipcRenderer, webUtils} from "electron";
 import {Terminal} from "xterm";
-import {buildPathPaste} from "./attach-utils";
+import {buildPathPaste} from "./attach-paste";
+import {pasteFromClipboard} from "./clipboard-paste";
 import {escapeHtml} from "./html-utils";
 import {mcpServerDetailsHtml} from "./mcp-utils";
 import {findImageTags, PastedImage} from "./transcript-images";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
-import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-model";
+import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-constants";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, formatAge, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey, resyncViewport} from "./terminal-utils";
-import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-launch";
+import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-presets";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
-import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-toolbar";
+import {EFFORT_LEVELS, GeminiApprovalMode, geminiModeKey, GEMINI_MODEL_CHOICES, GEMINI_PERMISSION_MODES, MODEL_CHOICES, modelLabel, parseGeminiApprovalMode, parsePermissionMode, PERMISSION_MODES, PermissionMode, SlashCommand} from "./prompt-choices";
 import {
   applyTemplate,
   assignSession,
@@ -75,7 +75,7 @@ import {
   WorkspaceState,
   workspaceOf,
 } from "./workspace-model";
-import * as path from "path";
+import {baseName, samePath} from "./renderer-path";
 
 interface Session {
   id: string;
@@ -305,7 +305,7 @@ const DEFAULT_SETTINGS: TerminalSettings = {
   fontSize: 11,
   theme: "vscode-dark",
   cursorBlink: false,
-  worktreeDir: require("path").join(require("os").homedir(), "worktrees"),
+  worktreeDir: "", // filled from the home dir at startup (see loadHomeWorktreeDir)
   editor: DEFAULT_EDITOR_ID,
   editorCommand: "",
   scrollSpeed: 0,
@@ -432,7 +432,7 @@ async function loadAndPopulateBranches(
   directory: string,
   selectedBranch?: string
 ): Promise<void> {
-  const branches = await ipcRenderer.invoke("get-branches", directory);
+  const branches = await window.agentyard.invoke("get-branches", directory);
   existingBranches = branches;
   parentBranchSelect.innerHTML = "";
 
@@ -524,7 +524,7 @@ function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptCont
       const timer = setTimeout(done, SEEK_STEP_TIMEOUT_MS);
       const parsed = term.onWriteParsed(done);
       const button = direction === "up" ? 64 : 65;
-      ipcRenderer.send("session-input", sessionId, `\x1b[<${button};1;${Math.ceil(term.rows / 2)}M`);
+      window.agentyard.send("session-input", sessionId, `\x1b[<${button};1;${Math.ceil(term.rows / 2)}M`);
     });
   };
 
@@ -533,7 +533,7 @@ function createStickyPrompt(sessionId: string, term: Terminal): StickyPromptCont
     prompts: () => prompts,
     currentIndex: () => index,
     refreshPrompts() {
-      ipcRenderer.invoke("get-session-prompts", sessionId)
+      window.agentyard.invoke("get-session-prompts", sessionId)
         .then((next: string[]) => {
           prompts = next; // only ever grows, so the current index stays valid
           renderPanePromptOf(sessionId); // the list button follows the prompt count
@@ -643,7 +643,7 @@ function openPromptPicker(leafId: number, anchor: HTMLElement): void {
       close();
       const idx = Number(row.dataset.idx);
       if ((e.target as HTMLElement).closest(".prompt-picker-fork")) {
-        ipcRenderer.send("fork-session-at", sessionId, idx, prompts[idx]);
+        window.agentyard.send("fork-session-at", sessionId, idx, prompts[idx]);
       } else {
         scrollPaneToPrompt(sticky, idx);
       }
@@ -718,29 +718,22 @@ function attachClipboard(term: Terminal, element: HTMLElement) {
   term.options.rightClickSelectsWord = false;
   element.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    try {
-      const text = clipboard.readText();
-      if (text) term.paste(text);
-    } catch (error) {
-      showToast(`Paste failed: ${error instanceof Error ? error.message : String(error)}`, "error");
-    }
+    void pasteFromClipboard(
+      () => window.agentyard.invoke("clipboard-read-text") as Promise<string>,
+      (text) => term.paste(text),
+      (message) => showToast(`Paste failed: ${message}`, "error"),
+    );
     term.focus();
   });
   term.onSelectionChange(() => {
     if (!term.hasSelection()) return;
-    try {
-      clipboard.writeText(term.getSelection());
-    } catch (error) {
-      console.error("Copying the terminal selection failed:", error);
-    }
+    window.agentyard.invoke("clipboard-write-text", term.getSelection())
+      .catch((error) => console.error("Copying the terminal selection failed:", error));
   });
   term.attachCustomKeyEventHandler((e) => {
     if (!isCopyKey(e, term.hasSelection())) return true;
-    try {
-      clipboard.writeText(term.getSelection());
-    } catch (error) {
-      showToast(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error");
-    }
+    window.agentyard.invoke("clipboard-write-text", term.getSelection())
+      .catch((error) => showToast(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error"));
     term.clearSelection();
     e.preventDefault();
     return false;
@@ -761,7 +754,7 @@ function createSideShell(sessionId: string): SideShell {
   panel.append(handle, host);
   attachClipboard(terminal, host);
   handle.addEventListener("mousedown", (e) => startShellResize(e, panel));
-  terminal.onData((data) => ipcRenderer.send("side-shell-input", sessionId, data));
+  terminal.onData((data) => window.agentyard.send("side-shell-input", sessionId, data));
   return {terminal, fitAddon, panel, host, visible: true};
 }
 
@@ -782,7 +775,7 @@ async function toggleSideShell(sessionId: string) {
   afterSideShellChange();
   const dims = shell.fitAddon.proposeDimensions();
   try {
-    const result = await ipcRenderer.invoke("side-shell-start", sessionId, dims?.cols ?? 80, dims?.rows ?? 12) as
+    const result = await window.agentyard.invoke("side-shell-start", sessionId, dims?.cols ?? 80, dims?.rows ?? 12) as
       {ok: boolean; error?: string};
     if (!result.ok) {
       disposeSideShell(sessionId);
@@ -838,7 +831,7 @@ function refitSideShells() {
     const dims = shell.fitAddon.proposeDimensions();
     if (!dims) return;
     shell.fitAddon.fit();
-    ipcRenderer.send("side-shell-resize", id, dims.cols, dims.rows);
+    window.agentyard.send("side-shell-resize", id, dims.cols, dims.rows);
   });
 }
 
@@ -865,12 +858,12 @@ function startShellResize(e: MouseEvent, panel: HTMLElement) {
   document.addEventListener("mouseup", onUp);
 }
 
-ipcRenderer.on("side-shell-output", (_event, sessionId: string, data: string) => {
+window.agentyard.on("side-shell-output", (sessionId: string, data: string) => {
   sideShells.get(sessionId)?.terminal.write(data);
 });
 
 // `exit` in the shell closes the panel; >_ starts a fresh one
-ipcRenderer.on("side-shell-exit", (_event, sessionId: string) => {
+window.agentyard.on("side-shell-exit", (sessionId: string) => {
   const hadFocus = sideShells.get(sessionId)?.panel.contains(document.activeElement);
   disposeSideShell(sessionId);
   if (hadFocus) sessions.get(sessionId)?.terminal?.focus();
@@ -908,7 +901,7 @@ function createTerminalUI(sessionId: string) {
   if (sessions.get(sessionId)?.config.codingAgent === "claude") registerImageLinks(sessionId, term);
 
   term.onData((data) => {
-    ipcRenderer.send("session-input", sessionId, data);
+    window.agentyard.send("session-input", sessionId, data);
   });
 
   // Listen for bell character to mark unread activity
@@ -948,7 +941,7 @@ function registerImageLinks(sessionId: string, term: Terminal) {
 
 async function openImagePreview(sessionId: string, imageId: number) {
   try {
-    const result = await ipcRenderer.invoke("get-session-image", sessionId, imageId) as
+    const result = await window.agentyard.invoke("get-session-image", sessionId, imageId) as
       { ok: true; image: PastedImage } | { ok: false; error: string };
     if (!result.ok) {
       showToast(result.error, "warning");
@@ -1022,7 +1015,7 @@ const backgroundReopens = new Map<string, string>();
 function requestReopen(sessionId: string, backgroundOf?: string) {
   if (backgroundOf) backgroundReopens.set(sessionId, backgroundOf);
   else backgroundReopens.delete(sessionId);
-  ipcRenderer.send("reopen-session", sessionId);
+  window.agentyard.send("reopen-session", sessionId);
 }
 
 function activateSession(sessionId: string) {
@@ -1273,7 +1266,7 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
   forkBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     menu?.classList.add("hidden");
-    ipcRenderer.send("fork-session", sessionId);
+    window.agentyard.send("fork-session", sessionId);
   });
 
   // Move to directory (local Claude sessions; a running one restarts in the new directory)
@@ -1315,7 +1308,7 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
     const session = sessions.get(sessionId);
     if (!session) return;
     try {
-      await ipcRenderer.invoke("set-skip-permissions", sessionId, !session.config.skipPermissions);
+      await window.agentyard.invoke("set-skip-permissions", sessionId, !session.config.skipPermissions);
       session.config = { ...session.config, skipPermissions: !session.config.skipPermissions };
       renderSidebar();
     } catch (err) {
@@ -1335,7 +1328,7 @@ async function setSessionArchived(sessionId: string) {
   if (!session) return;
   const archived = !session.meta.archived;
   try {
-    const result = await ipcRenderer.invoke("set-session-archived", sessionId, archived) as {ok: boolean; error?: string};
+    const result = await window.agentyard.invoke("set-session-archived", sessionId, archived) as {ok: boolean; error?: string};
     if (!result.ok) {
       showToast(result.error ?? "Archiving failed", "error");
       return;
@@ -1721,7 +1714,7 @@ function finishEditingSessionName(sessionId: string) {
       }
 
       // Save to backend
-      ipcRenderer.send("rename-session", sessionId, newName);
+      window.agentyard.send("rename-session", sessionId, newName);
     }
 
     nameInput.classList.add("hidden");
@@ -1910,7 +1903,7 @@ function isLocalClaude(config: SessionConfig): boolean {
 async function fetchDirInfo(projectId: string | undefined): Promise<DirInfo[]> {
   if (!projectId) return [];
   try {
-    return await ipcRenderer.invoke("get-dir-info", projectId) as DirInfo[];
+    return await window.agentyard.invoke("get-dir-info", projectId) as DirInfo[];
   } catch (error) {
     console.error(`get-dir-info failed for project ${projectId}:`, error);
     return [];
@@ -1976,7 +1969,7 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
   const projectName = projectId && isStandaloneProject(projectId)
     ? STANDALONE_PROJECT_NAME
     : projects.find(p => p.id === projectId)?.name ?? "";
-  const dirName = dir ? (info?.name ?? path.basename(dir)) : "choose directory";
+  const dirName = dir ? (info?.name ?? baseName(dir)) : "choose directory";
   const branch = info?.branch ?? session.meta.gitBranch ?? null;
   const dirMode = !isLocalClaude(session.config) || !hasOtherDirectory(projectId, dir) ? "text"
     : runtime[session.id]?.externallyOpen ? "external"
@@ -2071,7 +2064,7 @@ function renderPaneBreadcrumb(pane: HTMLElement, leafId: number, session: Sessio
 
 async function openInEditor(sessionId: string) {
   try {
-    const result = await ipcRenderer.invoke("open-in-editor", sessionId) as {ok: boolean; error?: string};
+    const result = await window.agentyard.invoke("open-in-editor", sessionId) as {ok: boolean; error?: string};
     if (!result.ok) showToast(result.error ?? "Could not open the editor", "error");
   } catch (error) {
     showToast(`open-in-editor failed: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -2082,8 +2075,7 @@ async function openInEditor(sessionId: string) {
 // with a single directory there is nothing to switch to, so no picker is offered.
 function hasOtherDirectory(projectId: string | undefined, currentDir: string): boolean {
   const dirs = projects.find(p => p.id === projectId)?.dirs ?? [];
-  const current = currentDir ? path.resolve(currentDir) : "";
-  return dirs.some(d => path.resolve(d) !== current);
+  return dirs.some(d => !samePath(d, currentDir));
 }
 
 // 📁 in a pane header: opens the picker; a running session is restarted only once a directory is picked
@@ -2176,7 +2168,7 @@ async function openDirPicker(sessionId: string): Promise<void> {
           if (leafId !== null) commitPanes(assignSession(paneState, leafId, sessionId));
           syncActiveSession(false);
         }
-        const result = await ipcRenderer.invoke("set-session-dir", sessionId, info.dir, wasRunning) as
+        const result = await window.agentyard.invoke("set-session-dir", sessionId, info.dir, wasRunning) as
           {ok: boolean; error?: string; warning?: string; session?: PersistedSession};
         close();
         if (!result.ok && wasRunning) requestReopen(sessionId);
@@ -2224,7 +2216,7 @@ window.addEventListener("focus", () => {
   refreshPaneBreadcrumbs();
 });
 
-ipcRenderer.on("session-needs-dir", (_event, sessionId: string) => {
+window.agentyard.on("session-needs-dir", (sessionId: string) => {
   showDirPickerFor(sessionId);
 });
 
@@ -2238,11 +2230,11 @@ function resetCreateButton() {
 }
 
 // Non-blocking notices from main (e.g. other agents already work in the directory)
-ipcRenderer.on("session-warning", (_event, message: string) => {
+window.agentyard.on("session-warning", (message: string) => {
   showToast(message, "warning");
 });
 
-ipcRenderer.on("session-error", async (_event, message: string) => {
+window.agentyard.on("session-error", async (message: string) => {
   resetCreateButton();
   showToast(message, "error");
   // Keep the dialog open; refresh occupancy so the user can pick another directory
@@ -2598,10 +2590,11 @@ function openTabContextMenu(sessionId: string, x: number, y: number) {
     ...(moveItems.length > 0 ? ["separator" as const, ...moveItems] : []),
     "separator",
     {label: "Rename…", run: () => startEditingTabName(sessionId)},
-    {label: "Fork", run: () => ipcRenderer.send("fork-session", sessionId), disabled: !canFork(session.config)},
+    {label: "Fork", run: () => window.agentyard.send("fork-session", sessionId), disabled: !canFork(session.config)},
     {label: "Copy Directory Path", run: () => {
-      clipboard.writeText(dir);
-      showToast(`Copied ${dir}`, "info");
+      window.agentyard.invoke("clipboard-write-text", dir)
+        .then(() => showToast(`Copied ${dir}`, "info"))
+        .catch((error) => showToast(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error"));
     }, disabled: !dir},
   ]);
 }
@@ -2626,7 +2619,7 @@ function startEditingTabName(sessionId: string) {
     const newName = input.value.trim();
     if (save && newName && newName !== session.name) {
       session.name = newName;
-      ipcRenderer.send("rename-session", sessionId, newName);
+      window.agentyard.send("rename-session", sessionId, newName);
     }
     nameEl.textContent = session.name;
     nameEl.setAttribute("title", session.name);
@@ -2836,13 +2829,13 @@ function insertPathsIntoPane(leafId: number, paths: string[]) {
     showToast("No usable file path to insert", "warning");
     return;
   }
-  ipcRenderer.send("session-input", session.id, text);
+  window.agentyard.send("session-input", session.id, text);
   session.terminal?.focus();
 }
 
 async function attachFilesToPane(leafId: number) {
   try {
-    const result = await ipcRenderer.invoke("select-attachment-files") as
+    const result = await window.agentyard.invoke("select-attachment-files") as
       { ok: true; paths: string[] } | { ok: false; error: string };
     if (!result.ok) {
       showToast(result.error, "error");
@@ -2858,7 +2851,7 @@ async function pasteClipboardImageToPane(leafId: number) {
   const session = paneClaudeSession(leafId);
   if (!session) return;
   try {
-    const result = await ipcRenderer.invoke("save-clipboard-image", session.id) as
+    const result = await window.agentyard.invoke("save-clipboard-image", session.id) as
       { ok: true; path: string } | { ok: false; error: string; empty?: boolean };
     if (!result.ok) {
       showToast(result.error, result.empty ? "warning" : "error");
@@ -2877,7 +2870,7 @@ async function toggleVoiceMode(leafId: number) {
     // Without experimental.voiceMode Gemini sends "/voice" to the model as a prompt
     let enabled = false;
     try {
-      enabled = await ipcRenderer.invoke("gemini-voice-enabled", session.id) as boolean;
+      enabled = await window.agentyard.invoke("gemini-voice-enabled", session.id) as boolean;
     } catch (error) {
       console.error(`gemini-voice-enabled failed for ${session.id}:`, error);
     }
@@ -2963,7 +2956,7 @@ function renderToolbarsOf(sessionId: string) {
 
 async function refreshSessionModel(sessionId: string) {
   try {
-    const info = await ipcRenderer.invoke("get-session-model", sessionId) as {model?: string; effort?: string};
+    const info = await window.agentyard.invoke("get-session-model", sessionId) as {model?: string; effort?: string};
     const prev = sessionModels.get(sessionId);
     // Keep a choice made from the menu until the next reply shows the model in the transcript
     sessionModels.set(sessionId, {model: info.model ?? prev?.model, effort: info.effort ?? prev?.effort});
@@ -3038,7 +3031,7 @@ async function setSessionMode(sessionId: string, target: PermissionMode) {
       renderToolbarsOf(sessionId);
       return;
     }
-    ipcRenderer.send("session-input", sessionId, "\x1b[Z");
+    window.agentyard.send("session-input", sessionId, "\x1b[Z");
     await wait(250);
   }
   const label = PERMISSION_MODES.find(m => m.mode === target)?.label ?? target;
@@ -3059,7 +3052,7 @@ async function setAgyMode(sessionId: string, target: AgyMode) {
       renderToolbarsOf(sessionId);
       return;
     }
-    ipcRenderer.send("session-input", sessionId, "\x1b[Z");
+    window.agentyard.send("session-input", sessionId, "\x1b[Z");
     await wait(250);
   }
   const label = AGY_MODES.find(m => m.mode === target)?.label ?? target;
@@ -3078,7 +3071,7 @@ async function setGeminiMode(sessionId: string, target: GeminiApprovalMode) {
       renderToolbarsOf(sessionId);
       return;
     }
-    ipcRenderer.send("session-input", sessionId, key);
+    window.agentyard.send("session-input", sessionId, key);
     await wait(250);
   }
   const label = GEMINI_PERMISSION_MODES.find(m => m.mode === target)?.label ?? target;
@@ -3161,7 +3154,7 @@ function menuItem(label: string, checked: boolean, run: () => void, hint?: strin
 }
 
 function sendToSession(sessionId: string, text: string) {
-  ipcRenderer.send("session-input", sessionId, text);
+  window.agentyard.send("session-input", sessionId, text);
   sessions.get(sessionId)?.terminal?.focus();
 }
 
@@ -3178,14 +3171,14 @@ function submitToSession(sessionId: string, command: string) {
     return;
   }
   sendToSession(sessionId, command);
-  setTimeout(() => ipcRenderer.send("session-input", sessionId, "\r"), GEMINI_SUBMIT_DELAY_MS);
+  setTimeout(() => window.agentyard.send("session-input", sessionId, "\r"), GEMINI_SUBMIT_DELAY_MS);
 }
 
 // agy model families (`agy models`), read once per app run by main
 let agyModels: Promise<AgyModelFamily[]> | null = null;
 
 async function openAgyModelMenu(button: HTMLElement, session: Session) {
-  agyModels ??= ipcRenderer.invoke("get-agy-models") as Promise<AgyModelFamily[]>;
+  agyModels ??= window.agentyard.invoke("get-agy-models") as Promise<AgyModelFamily[]>;
   let families: AgyModelFamily[] = [];
   try {
     families = await agyModels;
@@ -3306,7 +3299,7 @@ async function openCommandMenu(button: HTMLElement, leafId: number) {
   }
   let commands: SlashCommand[] = [];
   try {
-    commands = await ipcRenderer.invoke("list-slash-commands", session.id) as SlashCommand[];
+    commands = await window.agentyard.invoke("list-slash-commands", session.id) as SlashCommand[];
   } catch (error) {
     showToast(`list-slash-commands failed: ${error instanceof Error ? error.message : String(error)}`, "error");
     return;
@@ -3417,10 +3410,10 @@ function onFileDragOver(e: DragEvent, pane: HTMLElement, leafId: number) {
 
 function droppedFilePath(file: File): string {
   try {
-    const filePath = webUtils.getPathForFile(file);
+    const filePath = window.agentyard.getPathForFile(file);
     if (filePath) return filePath;
   } catch (error) {
-    console.error(`webUtils.getPathForFile failed for ${file.name}:`, error);
+    console.error(`getPathForFile failed for ${file.name}:`, error);
   }
   return (file as File & {path?: string}).path ?? "";
 }
@@ -3657,7 +3650,7 @@ function refitVisibleTerminals() {
     const proposedDimensions = session.fitAddon.proposeDimensions();
     if (proposedDimensions) {
       session.fitAddon.fit();
-      ipcRenderer.send("session-resize", id, proposedDimensions.cols, proposedDimensions.rows);
+      window.agentyard.send("session-resize", id, proposedDimensions.cols, proposedDimensions.rows);
     }
   }
   refitSideShells();
@@ -3674,7 +3667,7 @@ function commitPanes(next: PaneState) {
 function clearActiveSession() {
   activeSessionId = null;
   closeDirPicker();
-  ipcRenderer.send("session-viewed", null);
+  window.agentyard.send("session-viewed", null);
   const mcpSection = document.getElementById("mcp-section");
   if (mcpSection) {
     mcpSection.style.display = "none";
@@ -3717,7 +3710,7 @@ function syncActiveSession(force: boolean) {
 
   // Clear unread and activity status when switching to this session
   // Tell main which session is being viewed (any agent, so a stale Claude id is replaced)
-  ipcRenderer.send("session-viewed", liveId);
+  window.agentyard.send("session-viewed", liveId);
   if (hasHookStatus(session.config)) {
     applyTabStatus(liveId);
   } else {
@@ -3944,7 +3937,7 @@ function openSessionModal(sessionId: string) {
   else if (moved) resyncViewport(session.terminal);
   window.dispatchEvent(new Event("resize"));
 
-  ipcRenderer.send("session-viewed", sessionId);
+  window.agentyard.send("session-viewed", sessionId);
   if (hasHookStatus(session.config)) {
     applyTabStatus(sessionId);
   } else {
@@ -3959,7 +3952,7 @@ function openSessionModal(sessionId: string) {
 function dismissSessionModal() {
   sessionModalId = null;
   document.getElementById("session-modal")?.classList.add("hidden");
-  ipcRenderer.send("session-viewed", activeSessionId);
+  window.agentyard.send("session-viewed", activeSessionId);
 }
 
 function closeSessionModal() {
@@ -4002,7 +3995,7 @@ function closeSession(sessionId: string) {
   updateSessionState(sessionId, false);
 
   // Close PTY in main process
-  ipcRenderer.send("close-session", sessionId);
+  window.agentyard.send("close-session", sessionId);
 
   dropSessionFromPanes(sessionId);
 }
@@ -4039,7 +4032,7 @@ function deleteSession(sessionId: string) {
   sessions.delete(sessionId);
 
   // Delete in main process (handles worktree removal)
-  ipcRenderer.send("delete-session", sessionId);
+  window.agentyard.send("delete-session", sessionId);
 
   dropSessionFromPanes(sessionId, true);
 }
@@ -4066,7 +4059,7 @@ function showApplyToProjectDialog(sessionId: string) {
 }
 
 // Handle session output
-ipcRenderer.on("session-output", (_event, sessionId: string, data: string) => {
+window.agentyard.on("session-output", (sessionId: string, data: string) => {
   const session = sessions.get(sessionId);
   if (session && session.terminal) {
     // Filter out [3J (clear scrollback) to prevent viewport resets during interactive menus
@@ -4101,7 +4094,7 @@ ipcRenderer.on("session-output", (_event, sessionId: string, data: string) => {
 });
 
 // Handle hook-based status updates from main
-ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStatus) => {
+window.agentyard.on("session-status", (sessionId: string, status: SessionStatus) => {
   const session = sessions.get(sessionId);
   if (!session) return;
   session.status = status;
@@ -4114,7 +4107,7 @@ ipcRenderer.on("session-status", (_event, sessionId: string, status: SessionStat
 });
 
 // A hook event may follow a new prompt in the transcript: refresh that session's pane prompt line
-ipcRenderer.on("session-prompts-changed", (_event, sessionId: string) => {
+window.agentyard.on("session-prompts-changed", (sessionId: string) => {
   const sticky = stickyPrompts.get(sessionId);
   if (!sticky) return;
   if (sessions.get(sessionId)?.terminal !== sticky.term) {
@@ -4125,7 +4118,7 @@ ipcRenderer.on("session-prompts-changed", (_event, sessionId: string) => {
 });
 
 // Handle session created
-ipcRenderer.on("session-created", (_event, sessionId: string, persistedSession: any) => {
+window.agentyard.on("session-created", (sessionId: string, persistedSession: any) => {
   const session = addSession(persistedSession, true);
   activateSession(sessionId);
 
@@ -4159,12 +4152,12 @@ ipcRenderer.on("session-created", (_event, sessionId: string, persistedSession: 
 });
 
 // Handle session reopened
-ipcRenderer.on("session-reopened", (_event, sessionId: string) => {
+window.agentyard.on("session-reopened", (sessionId: string) => {
   activateSession(sessionId);
 });
 
 // Handle session deleted
-ipcRenderer.on("session-deleted", (_event, sessionId: string) => {
+window.agentyard.on("session-deleted", (sessionId: string) => {
   const session = sessions.get(sessionId);
   if (session) {
     if (session.element) session.element.remove();
@@ -4182,7 +4175,7 @@ ipcRenderer.on("session-deleted", (_event, sessionId: string) => {
 });
 
 // Load persisted sessions on startup
-ipcRenderer.on("load-persisted-sessions", (_event, persistedSessions: PersistedSession[]) => {
+window.agentyard.on("load-persisted-sessions", (persistedSessions: PersistedSession[]) => {
   persistedSessions.forEach(ps => {
     addSession(ps, false, false);
   });
@@ -4200,7 +4193,7 @@ ipcRenderer.on("load-persisted-sessions", (_event, persistedSessions: PersistedS
 // Antigravity status dots need the agentyard-status plugin; say once per start when it is missing
 async function reportAgyPluginStatus() {
   try {
-    const result = await ipcRenderer.invoke("agy-plugin-status") as {ok: boolean; reason?: string; message?: string};
+    const result = await window.agentyard.invoke("agy-plugin-status") as {ok: boolean; reason?: string; message?: string};
     if (result.ok) return;
     showToast(result.reason === "disabled"
       ? 'Antigravity status dots are off: run "agy plugin enable agentyard-status"'
@@ -4217,12 +4210,12 @@ function reopenVisibleSessions() {
   for (const leafId of paneElements.keys()) reopenPaneSession(leafId, true);
 }
 
-ipcRenderer.on("projects-updated", (_event, updated: Project[]) => {
+window.agentyard.on("projects-updated", (updated: Project[]) => {
   projects = updated;
   renderSidebar();
 });
 
-ipcRenderer.on("sessions-updated", (_event, updated: PersistedSession[], updatedRuntime: Record<string, SessionRuntime>) => {
+window.agentyard.on("sessions-updated", (updated: PersistedSession[], updatedRuntime: Record<string, SessionRuntime>) => {
   runtime = updatedRuntime ?? {};
   for (const ps of updated) {
     const existing = sessions.get(ps.id);
@@ -4244,7 +4237,7 @@ ipcRenderer.on("sessions-updated", (_event, updated: PersistedSession[], updated
   renderPanes(); // placeholder names and pane breadcrumbs
 });
 
-ipcRenderer.on("sync-warnings", (_event, warnings: string[]) => {
+window.agentyard.on("sync-warnings", (warnings: string[]) => {
   syncWarnings = warnings ?? [];
   renderSidebar();
 });
@@ -4351,7 +4344,7 @@ async function openNewSessionDialog(projectId?: string): Promise<void> {
   modal?.classList.remove("hidden");
 
   // Load last used settings
-  const lastSettings = await ipcRenderer.invoke("get-last-settings");
+  const lastSettings = await window.agentyard.invoke("get-last-settings");
 
   // Populate project and directory (default: first free directory)
   dialogIncludesStandalone = !!projectId && isStandaloneProject(projectId);
@@ -4415,7 +4408,7 @@ async function loadDirectoryOptions(projectId: string, parentBranch?: string): P
   dirOccupancy = new Map();
   let infos: DirInfo[] = [];
   try {
-    infos = projectId ? await ipcRenderer.invoke("get-dir-info", projectId) : [];
+    infos = projectId ? await window.agentyard.invoke("get-dir-info", projectId) : [];
   } catch (error) {
     console.error("Failed to load directory info:", error);
   }
@@ -4564,10 +4557,10 @@ createBtn?.addEventListener("click", () => {
   // Save settings for next time
   // projectId travels beside the config (main strips it before persisting the session config)
   const request = {...config, projectId: projectSelect.value || undefined};
-  ipcRenderer.send("save-settings", request);
+  window.agentyard.send("save-settings", request);
 
   // Create the session
-  ipcRenderer.send("create-session", request);
+  window.agentyard.send("create-session", request);
 });
 
 // Project modal
@@ -4654,7 +4647,7 @@ document.getElementById("project-cancel")?.addEventListener("click", closeProjec
 
 document.getElementById("project-add-folder")?.addEventListener("click", async () => {
   try {
-    const dir = await ipcRenderer.invoke("select-directory");
+    const dir = await window.agentyard.invoke("select-directory");
     if (dir && !projectDraftDirs.includes(dir)) {
       projectDraftDirs.push(dir);
       renderProjectDirs();
@@ -4666,7 +4659,7 @@ document.getElementById("project-add-folder")?.addEventListener("click", async (
 
 document.getElementById("project-parent-browse")?.addEventListener("click", async () => {
   try {
-    const dir = await ipcRenderer.invoke("select-directory");
+    const dir = await window.agentyard.invoke("select-directory");
     if (dir) {
       projectParentInput.value = dir;
       clearScanResults();
@@ -4689,7 +4682,7 @@ document.getElementById("project-scan")?.addEventListener("click", async () => {
   projectScanResults.classList.remove("hidden");
   let found: string[] = [];
   try {
-    found = await ipcRenderer.invoke("scan-parent-dir", parent, prefix);
+    found = await window.agentyard.invoke("scan-parent-dir", parent, prefix);
   } catch (error) {
     projectScanResults.innerHTML = `<div class="text-xs text-gray-500">${escapeHtml(`Scan failed: ${error instanceof Error ? error.message : String(error)}`)}</div>`;
     return;
@@ -4702,7 +4695,7 @@ document.getElementById("project-scan")?.addEventListener("click", async () => {
     const present = projectDraftDirs.includes(dir);
     return `<label class="${present ? "muted" : ""}">
       <input type="checkbox" class="form-checkbox scan-item" value="${escapeHtml(dir)}" checked ${present ? "disabled" : ""} />
-      <span class="truncate" title="${escapeHtml(dir)}">${escapeHtml(path.basename(dir))}${present ? " (already added)" : ""}</span>
+      <span class="truncate" title="${escapeHtml(dir)}">${escapeHtml(baseName(dir))}${present ? " (already added)" : ""}</span>
     </label>`;
   }).join("");
   projectAddSelectedBtn?.classList.remove("hidden");
@@ -4726,12 +4719,12 @@ projectSaveBtn?.addEventListener("click", async () => {
   projectSaveBtn.disabled = true;
   const previousIds = new Set(projects.map(p => p.id));
   try {
-    const result = await ipcRenderer.invoke("save-project", {id: editingProjectId, name, dirs: projectDraftDirs});
+    const result = await window.agentyard.invoke("save-project", {id: editingProjectId, name, dirs: projectDraftDirs});
     if (!result?.ok) {
       showProjectError(result?.error || "Could not save project");
       return;
     }
-    projects = await ipcRenderer.invoke("get-projects");
+    projects = await window.agentyard.invoke("get-projects");
     renderSidebar();
     closeProjectModal();
     // Refresh the new-session dialog's project list when it is open
@@ -4756,7 +4749,7 @@ async function loadMcpServers() {
   }
 
   try {
-    await ipcRenderer.invoke("list-mcp-servers", activeSessionId);
+    await window.agentyard.invoke("list-mcp-servers", activeSessionId);
     // Results will come via mcp-servers-updated event
   } catch (error) {
     console.error("Failed to load MCP servers:", error);
@@ -4778,7 +4771,7 @@ async function refreshMcpServers() {
 
   try {
     // Trigger MCP list command
-    await ipcRenderer.invoke("list-mcp-servers", activeSessionId);
+    await window.agentyard.invoke("list-mcp-servers", activeSessionId);
     // Wait a bit for the poller to process and send results
     await new Promise(resolve => setTimeout(resolve, 500));
   } catch (error) {
@@ -4823,7 +4816,7 @@ function renderMcpServers() {
         renderMcpServers();
 
         try {
-          await ipcRenderer.invoke("remove-mcp-server", server.name);
+          await window.agentyard.invoke("remove-mcp-server", server.name);
         } catch (error) {
           showToast(`Failed to remove server: ${error}`, "error");
           // Refresh to restore correct state on error
@@ -4853,7 +4846,7 @@ async function showMcpServerDetails(name: string) {
   detailsModal?.classList.remove("hidden");
 
   try {
-    const details = await ipcRenderer.invoke("get-mcp-server-details", name);
+    const details = await window.agentyard.invoke("get-mcp-server-details", name);
 
     if (detailsContent) {
       detailsContent.innerHTML = mcpServerDetailsHtml(details);
@@ -4994,7 +4987,7 @@ addMcpBtn?.addEventListener("click", async () => {
   addMcpBtn.classList.add("opacity-50", "cursor-not-allowed");
 
   try {
-    await ipcRenderer.invoke("add-mcp-server", name, config);
+    await window.agentyard.invoke("add-mcp-server", name, config);
     mcpModal?.classList.add("hidden");
     // Force immediate refresh of MCP servers
     await refreshMcpServers();
@@ -5031,7 +5024,7 @@ removeMcpDetailsBtn?.addEventListener("click", async () => {
     renderMcpServers();
 
     try {
-      await ipcRenderer.invoke("remove-mcp-server", serverName);
+      await window.agentyard.invoke("remove-mcp-server", serverName);
     } catch (error) {
       showToast(`Failed to remove server: ${error}`, "error");
       // Refresh to restore correct state on error
@@ -5041,7 +5034,7 @@ removeMcpDetailsBtn?.addEventListener("click", async () => {
 });
 
 // Listen for MCP polling started event
-ipcRenderer.on("mcp-polling-started", (_event, sessionId: string) => {
+window.agentyard.on("mcp-polling-started", (sessionId: string) => {
   if (sessionId === activeSessionId) {
     const addMcpServerBtn = document.getElementById("add-mcp-server");
     if (addMcpServerBtn) {
@@ -5052,7 +5045,7 @@ ipcRenderer.on("mcp-polling-started", (_event, sessionId: string) => {
 });
 
 // Listen for MCP server updates from main process
-ipcRenderer.on("mcp-servers-updated", (_event, sessionId: string, servers: McpServer[]) => {
+window.agentyard.on("mcp-servers-updated", (sessionId: string, servers: McpServer[]) => {
   // Any finished poll ends the spinner, even if the focus moved to another session meanwhile
   const addMcpServerBtn = document.getElementById("add-mcp-server");
   if (addMcpServerBtn) {
@@ -5097,9 +5090,24 @@ function syncEditorCommandField() {
 }
 const browseWorktreeDirBtn = document.getElementById("browse-worktree-dir");
 
+// The renderer cannot ask Node for the home dir, so the default worktreeDir arrives over IPC.
+// It only fills the default; saved settings are merged over it in loadSettings.
+async function loadHomeWorktreeDir() {
+  try {
+    const home = await window.agentyard.invoke("get-home-dir") as string;
+    const separator = home.includes("\\") ? "\\" : "/";
+    DEFAULT_SETTINGS.worktreeDir = `${home.replace(/[\\/]+$/, "")}${separator}worktrees`;
+    if (!terminalSettings.worktreeDir) terminalSettings.worktreeDir = DEFAULT_SETTINGS.worktreeDir;
+  } catch (error) {
+    console.error("Loading the home directory failed:", error);
+  }
+}
+
 // Load saved settings on startup
 async function loadSettings() {
-  const savedSettings = await ipcRenderer.invoke("get-terminal-settings");
+  // The default worktree dir needs the home dir (main process); both requests go out together and
+  // the merge below runs only after both, so a saved value still wins
+  const [, savedSettings] = await Promise.all([loadHomeWorktreeDir(), window.agentyard.invoke("get-terminal-settings")]);
   if (savedSettings) {
     terminalSettings = { ...DEFAULT_SETTINGS, ...savedSettings };
   }
@@ -5160,7 +5168,7 @@ openSettingsBtn?.addEventListener("click", async () => {
   populateSettingsForm();
 
   // Load and display app version
-  const version = await ipcRenderer.invoke("get-app-version");
+  const version = await window.agentyard.invoke("get-app-version");
   const versionElement = document.getElementById("app-version");
   if (versionElement) {
     versionElement.textContent = `Agentyard v${version}`;
@@ -5182,7 +5190,7 @@ resetSettingsBtn?.addEventListener("click", () => {
 
 // Browse worktree directory
 browseWorktreeDirBtn?.addEventListener("click", async () => {
-  const dir = await ipcRenderer.invoke("select-directory");
+  const dir = await window.agentyard.invoke("select-directory");
   if (dir) {
     settingsWorktreeDir.value = dir;
   }
@@ -5202,7 +5210,7 @@ saveSettingsBtn?.addEventListener("click", async () => {
   terminalSettings.editorCommand = settingsEditorCommand.value.trim();
 
   // Save to electron-store
-  await ipcRenderer.invoke("save-terminal-settings", terminalSettings);
+  await window.agentyard.invoke("save-terminal-settings", terminalSettings);
 
   // Apply to all existing terminals
   applySettingsToAllTerminals();
@@ -5235,7 +5243,7 @@ confirmApplyToProjectBtn?.addEventListener("click", async () => {
   }
 
   try {
-    const result = await ipcRenderer.invoke("apply-session-to-project", sessionId);
+    const result = await window.agentyard.invoke("apply-session-to-project", sessionId);
 
     if (result.success) {
       showToast(`Changes applied successfully to project directory.`, "success");
@@ -5257,11 +5265,11 @@ confirmApplyToProjectBtn?.addEventListener("click", async () => {
 // Minimize / maximize-restore / close of the frameless window (right of the tab row)
 (function initWindowControls() {
   const bind = (id: string, action: "minimize" | "toggle-maximize" | "close") =>
-    document.getElementById(id)?.addEventListener("click", () => ipcRenderer.send("window-control", action));
+    document.getElementById(id)?.addEventListener("click", () => window.agentyard.send("window-control", action));
   bind("window-minimize", "minimize");
   bind("window-maximize", "toggle-maximize");
   bind("window-close", "close");
-  ipcRenderer.on("window-maximized-changed", (_event, maximized: boolean) => {
+  window.agentyard.on("window-maximized-changed", (maximized: boolean) => {
     document.body.classList.toggle("window-maximized", maximized);
     const btn = document.getElementById("window-maximize");
     if (btn) {

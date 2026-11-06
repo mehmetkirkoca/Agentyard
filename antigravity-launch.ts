@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import {shellQuote} from "./attach-paste";
 import {HookEvent} from "./session-status";
 import {resolveSessionTitle} from "./transcript-meta";
 
@@ -51,7 +52,7 @@ function canExecute(file: string): boolean {
   }
 }
 
-export const shellQuote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
+export {shellQuote};
 
 // agy's conversation ids are uuids. They are read back from the status file, which tools agy runs
 // can also write to, so anything else is never used (and never typed into the shell).
