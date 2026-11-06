@@ -144,3 +144,4 @@ vite.config.ts.timestamp-*
 
 # Local design notes and plans (not part of the app)
 docs/superpowers/
+.claude/worktrees/
