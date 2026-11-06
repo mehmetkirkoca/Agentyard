@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { claudeProjectFolder } from "./claude-paths";
+import { claudeProjectFolder, encodeProjectDir } from "./claude-paths";
 import { adoptSidecar, adoptTranscript, inspectTranscript, relinkTranscript } from "./link-store";
 import { ClaudeProcess } from "./process-scan";
 import { computeDirOccupancy } from "./project-model";
@@ -402,6 +402,75 @@ export function moveSessionLink(session: PersistedSession, dir: string, home: st
 export function transcriptExists(uuid: string, dirs: string[], home: string, centralDir: string): boolean {
   if (existsNoFollow(path.join(centralDir, `${uuid}.jsonl`))) return true;
   return dirs.some(d => d && existsNoFollow(path.join(claudeProjectFolder(d, home), `${uuid}.jsonl`)));
+}
+
+export interface RelocateInput {
+  uuid: string;
+  /** directory the session is about to run in */
+  dir: string;
+  home: string;
+  centralDir: string;
+  /** fresh process scan */
+  external: ClaudeProcess[];
+  now: number;
+}
+
+/**
+ * Bring a transcript that lives outside the session's own folders back into
+ * Agentyard's layout: central store plus links in the folder of `dir`. Claude
+ * moves a transcript to a worktree's folder after EnterWorktree; left there it
+ * is not seen by the sync, and exiting that worktree session later replaces the
+ * directory's link with the file, which splits the session. Call only when
+ * transcriptExists is false.
+ *
+ * Returns whether `claude --resume` can open the transcript. A readable link
+ * elsewhere is reported as found and left alone. Throws, moving nothing, when
+ * the transcript may still be written or is ambiguous.
+ */
+export function relocateForeignTranscript(input: RelocateInput): boolean {
+  const {uuid, dir, home, centralDir, external, now} = input;
+  const projectsDir = path.join(home, ".claude", "projects");
+  let folderNames: string[];
+  try {
+    folderNames = fs.readdirSync(projectsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+
+  const reals: string[] = [];
+  let readable = false;
+  for (const name of folderNames) {
+    const file = path.join(projectsDir, name, `${uuid}.jsonl`);
+    if (!fs.existsSync(file)) continue;
+    readable = true;
+    if (fs.lstatSync(file).isFile()) reals.push(path.join(projectsDir, name));
+  }
+  if (reals.length > 1) throw new Error(`Transcript ${uuid} exists in several folders: ${reals.join(", ")}`);
+  if (reals.length === 0) return readable;
+
+  const folder = reals[0];
+  // A folder name cannot be decoded to its directory, so compare encoded paths. A
+  // subdirectory shares the prefix; so may a sibling, which only delays the move.
+  const folderName = path.basename(folder);
+  const writing = external.some(p => {
+    if (p.sessionUuid) return p.sessionUuid.toLowerCase() === uuid.toLowerCase();
+    const encoded = encodeProjectDir(path.resolve(p.cwd));
+    return encoded === folderName || encoded.startsWith(`${folderName}-`);
+  });
+  if (writing) throw new Error(`A Claude may be writing transcript ${uuid} in ${folder}; close it first`);
+  const mtimeMs = pendingAdoptionMtime(folder, uuid, centralDir);
+  if (mtimeMs !== null && now - mtimeMs < ADOPT_MIN_AGE_MS) {
+    throw new Error("Conversation is still being written; try again shortly");
+  }
+
+  const target = path.resolve(claudeProjectFolder(dir, home));
+  for (const name of [`${uuid}.jsonl`, uuid]) {
+    if (existsNoFollow(path.join(target, name))) throw new Error(`Target ${target} already has ${name}`);
+  }
+  adoptTranscript(folder, uuid, centralDir);
+  relinkTranscript(folder, target, uuid, centralDir);
+  return true;
 }
 
 /**

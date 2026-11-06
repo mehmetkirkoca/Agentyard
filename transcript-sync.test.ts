@@ -10,6 +10,7 @@ import {
   checkSessionGate,
   moveSessionLink,
   pendingAdoptionMtime,
+  relocateForeignTranscript,
   runSyncTick,
   SyncInput,
   transcriptExists,
@@ -652,6 +653,101 @@ describe("transcriptExists", () => {
     fs.mkdirSync(central, { recursive: true });
     fs.writeFileSync(path.join(central, `${U1}.jsonl`), "x");
     expect(transcriptExists(U1, [], home, central)).toBe(true);
+  });
+});
+
+describe("relocateForeignTranscript", () => {
+  let worktreeDir: string;
+  let worktreeFolder: string;
+
+  beforeEach(() => {
+    worktreeDir = path.join(dirA, ".claude", "worktrees", "wt");
+    worktreeFolder = claudeProjectFolder(worktreeDir, home);
+    fs.mkdirSync(worktreeFolder, { recursive: true });
+  });
+
+  function relocate(external: ClaudeProcess[] = []): boolean {
+    return relocateForeignTranscript({ uuid: U1, dir: dirA, home, centralDir: central, external, now: NOW });
+  }
+
+  it("moves a worktree folder's transcript and sidecar to the central store and links them into the directory", () => {
+    writeTranscript(worktreeFolder, U1, "history");
+    const sidecar = path.join(worktreeFolder, U1, "subagents");
+    fs.mkdirSync(sidecar, { recursive: true });
+    fs.writeFileSync(path.join(sidecar, "a.jsonl"), "sub");
+    fs.utimesSync(path.join(sidecar, "a.jsonl"), OLD / 1000, OLD / 1000);
+    fs.utimesSync(sidecar, OLD / 1000, OLD / 1000);
+    fs.utimesSync(path.join(worktreeFolder, U1), OLD / 1000, OLD / 1000);
+
+    expect(relocate()).toBe(true);
+
+    const centralFile = path.join(central, `${U1}.jsonl`);
+    expect(fs.lstatSync(centralFile).isFile()).toBe(true);
+    expect(fs.readlinkSync(path.join(folderA, `${U1}.jsonl`))).toBe(centralFile);
+    expect(fs.readFileSync(path.join(folderA, `${U1}.jsonl`), "utf8")).toBe("history");
+    expect(fs.readFileSync(path.join(folderA, U1, "subagents", "a.jsonl"), "utf8")).toBe("sub");
+    expect(fs.existsSync(path.join(worktreeFolder, `${U1}.jsonl`))).toBe(false);
+    expect(fs.existsSync(path.join(worktreeFolder, U1))).toBe(false);
+  });
+
+  it("is false when no project folder has the transcript", () => {
+    writeTranscript(folderB, U2, "x");
+    expect(relocate()).toBe(false);
+  });
+
+  it("is false when Claude has no projects folder yet", () => {
+    fs.rmSync(path.join(home, ".claude"), { recursive: true });
+    expect(relocate()).toBe(false);
+  });
+
+  it("is false for a dangling link, which claude --resume could not open", () => {
+    fs.symlinkSync(path.join(home, "gone.jsonl"), path.join(worktreeFolder, `${U1}.jsonl`));
+    expect(relocate()).toBe(false);
+  });
+
+  it("reports a readable link elsewhere as found without moving it", () => {
+    const target = path.join(home, "elsewhere.jsonl");
+    fs.writeFileSync(target, "x");
+    fs.symlinkSync(target, path.join(worktreeFolder, `${U1}.jsonl`));
+    expect(relocate()).toBe(true);
+    expect(fs.existsSync(path.join(folderA, `${U1}.jsonl`))).toBe(false);
+  });
+
+  it.each<[string, ClaudeProcess[] | undefined, number]>([
+    ["a recently written transcript", undefined, NOW - 1000],
+    ["a Claude with this uuid", [{ pid: 1, cwd: "/elsewhere", sessionUuid: U1 }], OLD],
+  ])("leaves %s in place and refuses", (_label, external, mtimeMs) => {
+    const file = writeTranscript(worktreeFolder, U1, "x", mtimeMs);
+    expect(() => relocate(external)).toThrow();
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(fs.existsSync(path.join(central, `${U1}.jsonl`))).toBe(false);
+  });
+
+  it("refuses while a Claude without a known uuid runs in the transcript's directory", () => {
+    const file = writeTranscript(worktreeFolder, U1, "x");
+    expect(() => relocate([{ pid: 1, cwd: worktreeDir }])).toThrow();
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+  });
+
+  it("ignores a Claude without a known uuid in an unrelated directory", () => {
+    writeTranscript(worktreeFolder, U1, "x");
+    expect(relocate([{ pid: 1, cwd: dirB }])).toBe(true);
+  });
+
+  it("refuses to guess between real transcripts in two folders", () => {
+    const first = writeTranscript(worktreeFolder, U1, "x");
+    const second = writeTranscript(folderB, U1, "y");
+    expect(() => relocate()).toThrow(/several/);
+    expect(fs.lstatSync(first).isFile()).toBe(true);
+    expect(fs.lstatSync(second).isFile()).toBe(true);
+  });
+
+  it("does not adopt when the directory's folder already holds a sidecar for the uuid", () => {
+    const file = writeTranscript(worktreeFolder, U1, "x");
+    fs.mkdirSync(path.join(folderA, U1));
+    expect(() => relocate()).toThrow();
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(fs.existsSync(path.join(central, `${U1}.jsonl`))).toBe(false);
   });
 });
 

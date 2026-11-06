@@ -34,6 +34,7 @@ import {
   checkSessionGate,
   moveSessionLink,
   pendingAdoptionMtime,
+  relocateForeignTranscript,
   runSyncTick,
   transcriptExists,
 } from "./transcript-sync";
@@ -1315,9 +1316,8 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
         throw new Error("Session is open elsewhere");
       }
       const sourceDir = session.linkedDir || dir;
-      // A session whose Claude never wrote anything starts fresh with its uuid.
-      isNew = !transcriptExists(session.sessionUuid, [sourceDir, dir], os.homedir(), centralSessionsDir());
-      const moving = !isNew && session.linkedDir !== dir;
+      const exists = transcriptExists(session.sessionUuid, [sourceDir, dir], os.homedir(), centralSessionsDir());
+      const moving = exists && session.linkedDir !== dir;
       const gate = localClaudeGate(sessions, {
         sessionId,
         sessionUuid: session.sessionUuid,
@@ -1327,6 +1327,16 @@ ipcMain.on("reopen-session", (event, sessionId: string) => {
       });
       if (gate.error) throw new Error(gate.error);
       if (gate.warning) event.reply("session-warning", gate.warning);
+      // A session whose Claude never wrote anything starts fresh with its uuid. A transcript
+      // left elsewhere (e.g. a worktree's folder) is not new: bring it back and resume it.
+      isNew = !exists && !relocateForeignTranscript({
+        uuid: session.sessionUuid,
+        dir,
+        home: os.homedir(),
+        centralDir: centralSessionsDir(),
+        external: scanClaudeProcesses(),
+        now: Date.now(),
+      });
       if (session.linkedDir !== dir) {
         if (moving) moveSessionLink(session, dir, os.homedir(), centralSessionsDir());
         session.linkedDir = dir;
