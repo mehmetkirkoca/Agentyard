@@ -2,7 +2,7 @@ import {execFileSync} from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import {addWorktree, diffAgainstBranch} from "./git-utils";
+import {addWorktree, applyPatch, diffAgainstBranch} from "./git-utils";
 
 // Real git and real simple-git: these guard what a hostile branch name can do
 describe("git operations on hostile branch names", () => {
@@ -34,6 +34,35 @@ describe("git operations on hostile branch names", () => {
     expect(fs.existsSync(canary)).toBe(false);
     expect(patch).toContain("+two");
     expect(patch.endsWith("\n")).toBe(true);
+  });
+
+  it("does not run a diff.external command from the repository's config", async () => {
+    const canary = path.join(repo, "canary");
+    const script = path.join(repo, "external-diff.sh");
+    fs.writeFileSync(script, `#!/bin/sh\ntouch '${canary}'\n`, {mode: 0o755});
+    git("config", "diff.external", script);
+    const branch = git("rev-parse", "--abbrev-ref", "HEAD").trim();
+    fs.writeFileSync(path.join(repo, "a.txt"), "two\n");
+
+    const patch = await diffAgainstBranch(repo, branch);
+
+    expect(fs.existsSync(canary)).toBe(false);
+    expect(patch).toContain("+two");
+  });
+
+  it("applies a patch from stdin to another checkout", async () => {
+    const branch = git("rev-parse", "--abbrev-ref", "HEAD").trim();
+    fs.writeFileSync(path.join(repo, "a.txt"), "two\n");
+    const patch = await diffAgainstBranch(repo, branch);
+    git("checkout", "--", "a.txt");
+
+    await applyPatch(repo, patch);
+
+    expect(fs.readFileSync(path.join(repo, "a.txt"), "utf8")).toBe("two\n");
+  });
+
+  it("rejects a patch that does not apply, keeping git's message", async () => {
+    await expect(applyPatch(repo, "not a patch\n")).rejects.toThrow(/git apply|patch/i);
   });
 
   it("refuses to diff against a branch name that reads as an option", async () => {

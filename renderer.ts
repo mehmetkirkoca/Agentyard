@@ -1,7 +1,7 @@
 import {FitAddon} from "@xterm/addon-fit";
 import {Terminal} from "xterm";
 import {buildPathPaste} from "./attach-paste";
-import {pasteFromClipboard} from "./clipboard-paste";
+import {pasteFromClipboard, sanitizePaste} from "./clipboard-paste";
 import {escapeHtml} from "./html-utils";
 import {mcpServerDetailsHtml} from "./mcp-utils";
 import {findImageTags, PastedImage} from "./transcript-images";
@@ -725,6 +725,13 @@ function attachClipboard(term: Terminal, element: HTMLElement) {
     );
     term.focus();
   });
+  // xterm's own paste (Ctrl+Shift+V, the menu) does not clean the text either, so it is taken first
+  element.addEventListener("paste", (e) => {
+    if (!e.clipboardData || !term.element?.contains(e.target as Node)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    term.paste(sanitizePaste(e.clipboardData.getData("text/plain")));
+  }, {capture: true});
   term.onSelectionChange(() => {
     if (!term.hasSelection()) return;
     window.agentyard.invoke("clipboard-write-text", term.getSelection())

@@ -1,4 +1,16 @@
-import {pasteFromClipboard} from "./clipboard-paste";
+import {pasteFromClipboard, sanitizePaste} from "./clipboard-paste";
+
+describe("sanitizePaste", () => {
+  it("removes what could end a bracketed paste, including the 8-bit CSI", () => {
+    expect(sanitizePaste("a\x1b[201~b")).toBe("a[201~b");
+    expect(sanitizePaste("a\x9b201~b")).toBe("a201~b");
+  });
+
+  it("keeps tabs, line breaks and Turkish characters", () => {
+    const text = "şğüöçıİ\tx\r\n  y\nz";
+    expect(sanitizePaste(text)).toBe(text);
+  });
+});
 
 describe("pasteFromClipboard", () => {
   it("passes multi-line text through unchanged", async () => {
@@ -7,6 +19,12 @@ describe("pasteFromClipboard", () => {
     await pasteFromClipboard(async () => text, paste, jest.fn());
     expect(paste).toHaveBeenCalledTimes(1);
     expect(paste).toHaveBeenCalledWith(text);
+  });
+
+  it("cleans a clipboard that tries to leave the bracketed paste", async () => {
+    const paste = jest.fn();
+    await pasteFromClipboard(async () => "ok\x1b[201~\nrm -rf x\n", paste, jest.fn());
+    expect(paste).toHaveBeenCalledWith("ok[201~\nrm -rf x\n");
   });
 
   it("does not paste when the clipboard is empty", async () => {

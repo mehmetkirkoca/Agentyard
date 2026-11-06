@@ -43,10 +43,11 @@ npm run build      # CSS + TypeScript into dist/
 npm run dist       # packaged build via electron-builder
 ```
 
-On Linux, if Electron refuses to start because of the Chromium sandbox (`chrome-sandbox` not owned by root), run it with `--no-sandbox`:
+On Linux, Electron refuses to start when `chrome-sandbox` is not owned by root with mode 4755, and `npm ci` or an Electron update resets it. `./start-agentyard.sh` checks this on every start: it offers to fix the file with `sudo`, and uses `--no-sandbox` with a warning only when the file stays unfixed. To fix it by hand:
 
 ```bash
-npm run build && npx electron . --no-sandbox
+sudo chown root:root node_modules/electron/dist/chrome-sandbox
+sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
 ```
 
 ## Data locations

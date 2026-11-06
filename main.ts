@@ -18,7 +18,8 @@ import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity
 import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
-import {addWorktree, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
+import {addWorktree, applyPatch, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
+import {ensurePrivateDir, writePrivateFile} from "./private-files";
 import {createTrustedIpc, hardenNavigation} from "./window-security";
 import {assertMcpConfig, checkInputArgs, isKnownSessionId} from "./ipc-validation";
 import {assignProjects, canAddDir, computeDirOccupancy, ensureStandaloneProject, filterRepoCandidates, findProjectForDir, isStandaloneProject, normalizeDirs, Occupancy, STANDALONE_PROJECT_NAME, standaloneScratchDir} from "./project-model";
@@ -74,6 +75,17 @@ try {
 } catch (error) {
   console.error("Data migration failed:", error);
   migrationWarnings = [`Data migration failed: ${error instanceof Error ? error.message : String(error)}`];
+}
+
+// Hook settings run as commands and transcripts hold whole conversations: only the owner gets in.
+// Never blocks startup; everything below the folder is covered by its mode.
+try {
+  ensurePrivateDir(appHome());
+  // Clipboard screenshots live outside that folder (see attachmentsDir)
+  const attachments = path.join(standaloneScratchDir(os.homedir()), "attachments");
+  if (fs.existsSync(attachments)) ensurePrivateDir(attachments);
+} catch (error) {
+  console.error("Error restricting the app's data folders:", error);
 }
 
 const store = new Store();
@@ -144,7 +156,7 @@ function migrateLegacyAttachments(home: string = os.homedir()): void {
   const newDir = path.join(standaloneScratchDir(home), "attachments");
   try {
     if (fs.existsSync(oldDir) && fs.statSync(oldDir).isDirectory()) {
-      fs.mkdirSync(newDir, {recursive: true});
+      ensurePrivateDir(newDir);
       for (const entry of fs.readdirSync(oldDir)) {
         const src = path.join(oldDir, entry);
         const dest = path.join(newDir, entry);
@@ -535,7 +547,8 @@ function writeMcpConfigFile(projectDir: string, mcpServers: any): string | null 
       fs.mkdirSync(projectWorktreeDir, { recursive: true });
     }
 
-    fs.writeFileSync(configFilePath, configContent, "utf8");
+    // Holds the project's MCP servers, whose env and headers can carry tokens
+    writePrivateFile(configFilePath, configContent);
 
     return configFilePath;
   } catch (error) {
@@ -946,12 +959,13 @@ trustedIpc.handle("save-clipboard-image", (_event, sessionId: string): { ok: tru
     if (image.isEmpty()) return {ok: false, empty: true, error: "Clipboard has no image"};
 
     const dir = attachmentsDir(session.sessionUuid);
-    fs.mkdirSync(dir, {recursive: true});
+    ensurePrivateDir(path.dirname(dir));
+    ensurePrivateDir(dir);
     const now = new Date();
     let n = 1;
     while (fs.existsSync(path.join(dir, attachmentFileName(now, n)))) n++;
     const filePath = path.join(dir, attachmentFileName(now, n));
-    fs.writeFileSync(filePath, image.toPNG());
+    writePrivateFile(filePath, image.toPNG());
     return {ok: true, path: filePath};
   } catch (error) {
     console.error(`Error saving clipboard image for session ${sessionId}:`, error);
@@ -1896,11 +1910,6 @@ trustedIpc.handle("apply-session-to-project", async (_event, sessionId: string) 
     const projectDir = session.config.projectDir;
     const worktreePath = session.worktreePath;
     const parentBranch = session.config.parentBranch;
-    const patchFilename = `agentyard-patch-${Date.now()}.patch`;
-    const patchPath = path.join("/tmp", patchFilename);
-
-    // Generate patch file from parent branch to current state (includes commits + unstaged changes)
-    // Using diff against parent branch to capture all changes
     const patchContent = await diffAgainstBranch(worktreePath, parentBranch);
 
     // If patch is empty, there are no changes to apply
@@ -1908,23 +1917,10 @@ trustedIpc.handle("apply-session-to-project", async (_event, sessionId: string) 
       return { success: false, error: "No changes to apply" };
     }
 
-    // Write patch to temp file
-    fs.writeFileSync(patchPath, patchContent);
-
-    // Apply patch to original project directory
     try {
-      await execAsync(`git apply "${patchPath}"`, { cwd: projectDir });
-
-      // Clean up patch file on success
-      fs.unlinkSync(patchPath);
-
+      await applyPatch(projectDir, patchContent);
       return { success: true };
     } catch (applyError: any) {
-      // Clean up patch file on error
-      if (fs.existsSync(patchPath)) {
-        fs.unlinkSync(patchPath);
-      }
-
       return {
         success: false,
         error: `Failed to apply patch: ${applyError.message || applyError}`

@@ -386,6 +386,7 @@ async function checkIsolation(cdp, results, home) {
   results.check("eval is blocked", injected.evalBlocked);
 
   const before = await cdp.evaluate("location.href");
+  results.check("app data folder is private", (fs.statSync(path.join(home, ".agentyard")).mode & 0o777) === 0o700);
   results.check("window.open is denied", await cdp.evaluate(`window.open("https://example.com/") === null`));
   for (const target of ["https://example.com/", "file:///etc/hostname"]) {
     await cdp.evaluate(`location.href = ${JSON.stringify(target)}; 1`);
@@ -459,6 +460,26 @@ async function checkNewSession(cdp, results, home) {
   await cdp.send("Input.dispatchMouseEvent", {type: "mouseReleased", x: pos.x, y: pos.y, button: "right", clickCount: 1});
   const pasteOk = await waitFor(() => log().includes(expected), "the pasted text in the PTY", 8000).catch(() => false);
   results.check("right-click paste keeps the order and the lines (bracketed)", !!pasteOk, pasteOk ? undefined : log().slice(-300));
+
+  // A clipboard that tries to leave the bracketed paste, through both paste routes
+  const hostile = "smoke-hostile\x1b[201~smoke-escaped\n";
+  const cleaned = "\x1b[200~smoke-hostile[201~smoke-escaped\r\x1b[201~";
+  const logBeforeRightClick = log().length;
+  await cdp.evaluate(`window.agentyard.invoke("clipboard-write-text", ${JSON.stringify(hostile)})`);
+  await cdp.send("Input.dispatchMouseEvent", {type: "mousePressed", x: pos.x, y: pos.y, button: "right", clickCount: 1});
+  await cdp.send("Input.dispatchMouseEvent", {type: "mouseReleased", x: pos.x, y: pos.y, button: "right", clickCount: 1});
+  const rightClickClean = await waitFor(() => log().slice(logBeforeRightClick).includes(cleaned), "the cleaned right-click paste", 8000).catch(() => false);
+  results.check("right-click paste cannot leave the bracketed paste", !!rightClickClean, rightClickClean ? undefined : log().slice(-300));
+  const logBeforeEvent = log().length;
+  await cdp.evaluate(`(() => {
+    const data = new DataTransfer();
+    data.setData("text/plain", ${JSON.stringify(hostile)});
+    const area = [...document.querySelectorAll(".xterm-helper-textarea")].find(t => t.offsetParent !== null);
+    area.dispatchEvent(new ClipboardEvent("paste", {clipboardData: data, bubbles: true, cancelable: true}));
+  })()`);
+  const eventClean = await waitFor(() => log().slice(logBeforeEvent).includes(cleaned), "the cleaned paste event", 8000).catch(() => false);
+  results.check("paste event cannot leave the bracketed paste", !!eventClean, eventClean ? undefined : log().slice(-300));
+  results.check("paste event reaches the PTY once", log().slice(logBeforeEvent).split(cleaned).length === 2);
 
   // Real File through a real drop: webUtils.getPathForFile needs a browser-made File
   const dropDir = path.join(home, "Boşluklu Klasör şğüöçıİ");

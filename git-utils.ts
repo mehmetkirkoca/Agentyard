@@ -1,3 +1,4 @@
+import {execFile} from "child_process";
 import {simpleGit, SimpleGit} from "simple-git";
 
 /**
@@ -51,11 +52,24 @@ function assertNotOption(branch: string): void {
 
 /**
  * The patch from a branch to the working tree. Runs without a shell: branch names come from the
- * repository and may hold shell syntax.
+ * repository and may hold shell syntax. A repository's own config must not run anything or change
+ * the patch, so its external diff and textconv commands stay off.
  */
 export async function diffAgainstBranch(dirPath: string, branch: string): Promise<string> {
   assertNotOption(branch);
-  return simpleGit(dirPath).raw(["diff", "--end-of-options", branch, "--"]);
+  return simpleGit(dirPath).raw(["diff", "--no-ext-diff", "--no-textconv", "--end-of-options", branch, "--"]);
+}
+
+/**
+ * Apply a patch to a directory. It goes through stdin, so it never sits in a shared temp folder.
+ */
+export function applyPatch(dirPath: string, patch: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", ["apply"], {cwd: dirPath}, (error) => (error ? reject(error) : resolve()));
+    // git may exit before reading everything; its exit code above carries the reason
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(patch);
+  });
 }
 
 /**

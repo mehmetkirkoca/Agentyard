@@ -21,21 +21,26 @@ jobs:
 
       - name: Generate release notes
         id: release_notes
+        env:
+          # Through env: a tag name may hold shell syntax
+          REF_NAME: ${{ github.ref_name }}
         run: |
           # Get the previous tag
           PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -v "$(git describe --tags --abbrev=0)" | head -n 1)
           
           # Generate changelog
           if [ -z "$PREVIOUS_TAG" ]; then
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${{ github.ref_name }})
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$REF_NAME")
           else
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..${{ github.ref_name }})
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" "${PREVIOUS_TAG}..${REF_NAME}")
           fi
           
           # Save to output
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Random delimiter: a commit subject must not be able to end the value
+          DELIMITER="CHANGELOG_$(openssl rand -hex 16)"
+          echo "CHANGELOG<<$DELIMITER" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+          echo "$DELIMITER" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         id: create_release
@@ -69,7 +74,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build and publish
         run: npm run dist
