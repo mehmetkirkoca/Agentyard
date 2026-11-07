@@ -238,20 +238,40 @@ export function createAgyWaitingDetector(): (chunk: string) => boolean {
 }
 
 /**
+ * Whether candidateId is recorded on disk as a sub-agent of parentId
+ * (~/.gemini/antigravity-cli/brain/<parentId>/.system_generated/subagents/<candidateId>.json).
+ */
+export function isAgySubagentOf(parentId: string, candidateId: string, home: string = os.homedir()): boolean {
+  if (!isAgyConversationId(parentId) || !isAgyConversationId(candidateId)) return false;
+  const rel = path.join(".gemini", "antigravity-cli", "brain", parentId, ".system_generated", "subagents", `${candidateId}.json`);
+  return fs.existsSync(path.join(home, rel)) || fs.existsSync(path.join(home, "snap", "antigravity-cli", "common", rel));
+}
+
+/**
  * Which hook events belong to the session's conversation. agy's sub-agents may report their own
- * conversation ids into the same status file; they must not replace the session's id nor its
- * status. The id is taken from the first event when none is known, and otherwise changes only on
- * SessionStart (a new top-level conversation, e.g. after /clear or a missing --conversation id).
+ * conversation ids (including SessionStart when a sub-agent is spawned) into the same status file;
+ * they must not replace the session's id nor its status. The id is taken from the first event when
+ * none is known, and otherwise changes only on a top-level SessionStart (e.g. after /clear or a
+ * missing --conversation id).
  */
 export function filterAgyEvents(
   currentId: string | undefined,
   events: HookEvent[],
+  isSubagent: (parentId: string, candidateId: string) => boolean = isAgySubagentOf,
 ): {conversationId: string | undefined; accepted: HookEvent[]} {
   let conversationId = currentId;
   const accepted: HookEvent[] = [];
   for (const ev of events) {
     const id = ev.conversationId;
     if (id !== undefined && !isAgyConversationId(id)) continue;
+    const parentId = isAgyConversationId(ev.parentConversationId) ? ev.parentConversationId : undefined;
+    if (parentId) {
+      if (!conversationId) conversationId = parentId;
+      continue;
+    }
+    if (id && conversationId && id !== conversationId && isSubagent(conversationId, id)) {
+      continue;
+    }
     if (id && (!conversationId || ev.hook_event_name === "SessionStart")) conversationId = id;
     if (!id || id === conversationId) accepted.push(ev);
   }
@@ -293,7 +313,7 @@ const AGY_TOOL_EVENTS = ["PreToolUse", "PostToolUse"];
  * stdout, so agy keeps its default behaviour.
  */
 export function buildAgyHookCommand(event: string): string {
-  const fields = `grep -oE '"(conversationId|fullyIdle)" *: *("[^"]*"|true|false)' | sed 's/^/,/' | tr -d '\\n'`;
+  const fields = `grep -oE '"(conversationId|parentConversationId|fullyIdle)" *: *("[^"]*"|true|false)' | sed 's/^/,/' | tr -d '\\n'`;
   return `f="$${AGY_STATUS_ENV}"; if [ -n "$f" ] && [ -f "$f" ]; then `
     + `printf '{"hook_event_name":"%s"%s}\\n' '${event}' "$(${fields})" >> "$f"; else cat > /dev/null; fi`;
 }

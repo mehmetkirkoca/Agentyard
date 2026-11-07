@@ -5,8 +5,9 @@ export interface HookEvent {
   /** Claude Code and Gemini CLI */
   session_id?: string;
   notification_type?: string;
-  /** Antigravity CLI: its conversation id, and on Stop whether it is fully idle */
+  /** Antigravity CLI: its conversation id, parent conversation id (for sub-agents), and on Stop whether it is fully idle */
   conversationId?: string;
+  parentConversationId?: string;
   fullyIdle?: boolean;
 }
 

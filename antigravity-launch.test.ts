@@ -165,6 +165,31 @@ describe("filterAgyEvents", () => {
     expect(result.accepted).toHaveLength(2);
   });
 
+  it("ignores sub-agent SessionStart when parentConversationId is present", () => {
+    const subStart = {hook_event_name: "SessionStart", conversationId: ids.b, parentConversationId: ids.a};
+    const subRun = {hook_event_name: "PreInvocation", conversationId: ids.b, parentConversationId: ids.a};
+    const result = filterAgyEvents(ids.a, [subStart, subRun, ev("Stop", "a")]);
+    expect(result.conversationId).toBe(ids.a);
+    expect(result.accepted.map(e => e.hook_event_name)).toEqual(["Stop"]);
+  });
+
+  it("learns parentConversationId when first seen event is from a sub-agent", () => {
+    const subStart = {hook_event_name: "SessionStart", conversationId: ids.b, parentConversationId: ids.a};
+    const result = filterAgyEvents(undefined, [subStart, ev("Stop", "a")]);
+    expect(result.conversationId).toBe(ids.a);
+    expect(result.accepted.map(e => e.hook_event_name)).toEqual(["Stop"]);
+  });
+
+  it("ignores sub-agent SessionStart when detected via subagents directory", () => {
+    const result = filterAgyEvents(
+      ids.a,
+      [ev("SessionStart", "b"), ev("PreInvocation", "b"), ev("Stop", "a")],
+      (parentId, candidateId) => parentId === ids.a && candidateId === ids.b,
+    );
+    expect(result.conversationId).toBe(ids.a);
+    expect(result.accepted.map(e => e.hook_event_name)).toEqual(["Stop"]);
+  });
+
   it("keeps events without an id", () => {
     expect(filterAgyEvents(ids.a, [{hook_event_name: "Stop"}]).accepted).toHaveLength(1);
   });
@@ -188,6 +213,22 @@ describe("buildAgyHookCommand", () => {
     fs.writeFileSync(file, "");
     expect(runHook({[AGY_STATUS_ENV]: file})).toBe("");
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({hook_event_name: "Stop", conversationId: "c1", fullyIdle: true});
+  });
+
+  it("captures parentConversationId for sub-agent events", () => {
+    const file = path.join(dir, "sub.jsonl");
+    fs.writeFileSync(file, "");
+    const subInput = '{"conversationId":"sub1","parentConversationId":"parent1","modelName":"m"}';
+    execFileSync("sh", ["-c", buildAgyHookCommand("SessionStart")], {
+      input: subInput,
+      env: {PATH: process.env.PATH, [AGY_STATUS_ENV]: file},
+      encoding: "utf8",
+    });
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      hook_event_name: "SessionStart",
+      conversationId: "sub1",
+      parentConversationId: "parent1",
+    });
   });
 
   it("writes nothing outside Agentyard or without the status file", () => {
