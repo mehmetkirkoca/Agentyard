@@ -642,6 +642,15 @@ describe("canAdoptForMove", () => {
       error: "Conversation is still being written; try again shortly",
     });
   });
+
+  it("allows a recently written transcript when its writer was stopped and exited", () => {
+    expect(canAdoptForMove({ ...base, mtimeMs: NOW, writerStopped: true })).toEqual({ ok: true });
+  });
+
+  it("still refuses a uuid-less claude in the source dir when the writer was stopped", () => {
+    const external = [{ pid: 1, cwd: "/w/acme1" }];
+    expect(canAdoptForMove({ ...base, external, mtimeMs: NOW, writerStopped: true })).toEqual({ ok: false, error: busy });
+  });
 });
 
 describe("transcriptExists", () => {

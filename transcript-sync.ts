@@ -544,6 +544,8 @@ export interface AdoptForMoveInput {
   /** mtime of the real transcript */
   mtimeMs: number;
   now: number;
+  /** the session's own Claude wrote it last and has been stopped and exited, so a fresh mtime is safe */
+  writerStopped?: boolean;
 }
 
 /**
@@ -557,7 +559,7 @@ export function canAdoptForMove(input: AdoptForMoveInput): {ok: true} | {ok: fal
   if (input.external.some(p => !p.sessionUuid && isSameOrInside(p.cwd, src))) {
     return {ok: false, error: `Directory ${input.srcDir} has an active Claude; close it first`};
   }
-  if (input.now - input.mtimeMs < ADOPT_MIN_AGE_MS) {
+  if (!input.writerStopped && input.now - input.mtimeMs < ADOPT_MIN_AGE_MS) {
     return {ok: false, error: "Conversation is still being written; try again shortly"};
   }
   return {ok: true};

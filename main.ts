@@ -1065,6 +1065,7 @@ function checkMoveSource(
   session: PersistedSession,
   sessions: PersistedSession[],
   external: ReturnType<typeof scanClaudeProcesses>,
+  writerStopped = false,
 ): string | null {
   const srcDir = session.linkedDir || session.config.projectDir;
   if (!srcDir) return null;
@@ -1075,6 +1076,7 @@ function checkMoveSource(
     external,
     mtimeMs,
     now: Date.now(),
+    writerStopped,
   });
   return check.ok ? null : check.error;
 }
@@ -1087,7 +1089,7 @@ function checkMoveSource(
  */
 function localClaudeGate(
   sessions: PersistedSession[],
-  opts: {sessionId: string; sessionUuid?: string; sourceDir?: string; targetDir: string; moving?: PersistedSession},
+  opts: {sessionId: string; sessionUuid?: string; sourceDir?: string; targetDir: string; moving?: PersistedSession; writerStopped?: boolean},
 ): {error?: string; warning?: string} {
   let external: ReturnType<typeof scanClaudeProcesses>;
   try {
@@ -1105,7 +1107,7 @@ function localClaudeGate(
     targetDir: opts.targetDir,
   });
   if (!gate.ok) return {error: gate.error};
-  const moveError = opts.moving ? checkMoveSource(opts.moving, sessions, external) : null;
+  const moveError = opts.moving ? checkMoveSource(opts.moving, sessions, external, opts.writerStopped) : null;
   if (moveError) return {error: moveError};
   return {warning: gate.warning};
 }
@@ -1791,21 +1793,29 @@ trustedIpc.on("fork-session-at", (event, sessionId: string, promptIndex: number,
 // `restart`: the session may be running; stop it and wait for its PTY to exit before moving
 // (the renderer reopens it in the new directory afterwards).
 trustedIpc.handle("set-session-dir", async (_event, sessionId: string, dir: string, restart = false): Promise<{ ok: true; session: PersistedSession; warning?: string } | { ok: false; error: string }> => {
+  // Every refusal is logged: the renderer only shows it as a toast and reopens the session where it was
+  const fail = (error: string): {ok: false; error: string} => {
+    console.error(`Switching directory of session ${sessionId} to ${dir} refused: ${error}`);
+    return {ok: false, error};
+  };
   try {
     if (hasLivePty(sessionId)) {
-      if (!restart) return {ok: false, error: "Stop the session first"};
+      if (!restart) return fail("Stop the session first");
       stopSessionPty(sessionId);
-      if (!(await waitForPtyExit(sessionId))) return {ok: false, error: "The session did not stop in time; try again"};
+      if (!(await waitForPtyExit(sessionId))) return fail("The session did not stop in time; try again");
     }
+    // A restart means this session's own Claude was running (the renderer may already have closed it)
+    // and has now exited: it wrote the transcript last, so a fresh mtime does not mean another writer.
+    const writerStopped = restart;
     const sessions = getPersistedSessions();
     const session = sessions.find(s => s.id === sessionId);
-    if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
-    if (!isLocalClaude(session)) return {ok: false, error: "Only local Claude sessions can switch directory"};
-    if (lastExternallyOpen.has(session.sessionUuid.toLowerCase())) return {ok: false, error: "Session is open elsewhere"};
+    if (!session) return fail(`Session not found: ${sessionId}`);
+    if (!isLocalClaude(session)) return fail("Only local Claude sessions can switch directory");
+    if (lastExternallyOpen.has(session.sessionUuid.toLowerCase())) return fail("Session is open elsewhere");
 
     const project = getProjects().find(p => p.id === session.projectId);
     const target = project?.dirs.find(d => path.resolve(d) === path.resolve(dir));
-    if (!target) return {ok: false, error: "Directory is not in this project"};
+    if (!target) return fail("Directory is not in this project");
 
     const oldDir = session.linkedDir || session.config.projectDir;
     // A session whose Claude never wrote anything has no link to move: only the record changes.
@@ -1816,8 +1826,9 @@ trustedIpc.handle("set-session-dir", async (_event, sessionId: string, dir: stri
       sourceDir: oldDir || undefined,
       targetDir: target,
       moving: exists ? session : undefined,
+      writerStopped,
     });
-    if (gate.error) return {ok: false, error: gate.error};
+    if (gate.error) return fail(gate.error);
 
     if (exists) moveSessionLink(session, target, os.homedir(), centralSessionsDir());
     try {
