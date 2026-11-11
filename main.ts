@@ -27,6 +27,7 @@ import {scanClaudeProcesses} from "./process-scan";
 import {PromptHistory, readUserPrompts} from "./prompt-history";
 import {listAntigravitySlashCommands, listGeminiSlashCommands, listSlashCommands, readSessionModel, SessionModel, SlashCommand} from "./prompt-toolbar";
 import {buildForkTranscript} from "./fork-transcript";
+import {assertNoteContent, assertNoteId, createNote, deleteNote, parseStoredNotes, sortNotes, updateNote} from "./notes-model";
 import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {BRACKETED_PASTE_MODE_ENABLE, isTerminalReady} from "./terminal-utils";
 import {hasMcpListResult, mcpAddJsonCommand, mcpGetCommand, mcpRemoveCommand, parseMcpListOutput} from "./mcp-utils";
@@ -1892,6 +1893,28 @@ trustedIpc.handle("get-terminal-settings", () => {
 
 trustedIpc.handle("save-terminal-settings", (_event, settings: any) => {
   (store as any).set("terminalSettings", settings);
+});
+
+// Free-form notes (Ctrl+Shift+N modal); the renderer always gets the list most recent first
+const readNotes = () => parseStoredNotes((store as any).get("notes"));
+const writeNotes = (notes: ReturnType<typeof readNotes>) => (store as any).set("notes", notes);
+
+trustedIpc.handle("get-notes", () => sortNotes(readNotes()));
+
+trustedIpc.handle("create-note", () => {
+  const {notes, note} = createNote(readNotes(), uuidv4(), Date.now());
+  writeNotes(notes);
+  return note;
+});
+
+trustedIpc.handle("save-note", (_event, id: unknown, content: unknown) => {
+  const {notes, note} = updateNote(readNotes(), assertNoteId(id), assertNoteContent(content), Date.now());
+  writeNotes(notes);
+  return note;
+});
+
+trustedIpc.handle("delete-note", (_event, id: unknown) => {
+  writeNotes(deleteNote(readNotes(), assertNoteId(id)));
 });
 
 // Get app version

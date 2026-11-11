@@ -1600,6 +1600,113 @@ body {
     overflow-wrap: anywhere;
   }
 
+  /* Notes modal (Ctrl+Shift+N): note list on the left, the open note on the right */
+  .notes-modal {
+    max-width: 960px;
+  }
+
+  .notes-body {
+    @apply flex flex-1;
+    min-height: 0;
+  }
+
+  .notes-sidebar {
+    @apply flex flex-col flex-none;
+    width: 260px;
+    border-right: 1px solid var(--vsc-border-strong);
+  }
+
+  .notes-new-btn {
+    @apply flex-none text-left;
+    margin: 8px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--vsc-fg);
+    border: 1px dashed var(--vsc-input-border);
+  }
+
+  .notes-new-btn:hover {
+    background-color: var(--vsc-hover);
+    color: var(--vsc-fg-strong);
+  }
+
+  .notes-list {
+    @apply flex-1 overflow-y-auto;
+    min-height: 0;
+  }
+
+  .notes-item {
+    @apply block w-full text-left;
+    padding: 6px 12px;
+    border-left: 2px solid transparent;
+    color: var(--vsc-fg);
+  }
+
+  .notes-item:hover {
+    background-color: var(--vsc-hover);
+  }
+
+  .notes-item.active {
+    background-color: var(--vsc-active-focus);
+    border-left-color: var(--vsc-focus);
+    color: var(--vsc-fg-strong);
+  }
+
+  .notes-item-title {
+    @apply truncate;
+    font-size: 13px;
+  }
+
+  .notes-item-date {
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .notes-editor {
+    @apply relative flex flex-col flex-1;
+    min-width: 0;
+  }
+
+  .notes-editor-toolbar {
+    @apply flex flex-none items-center justify-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--vsc-border);
+  }
+
+  .notes-editor-toolbar.hidden,
+  .notes-textarea.hidden,
+  .notes-empty.hidden {
+    display: none;
+  }
+
+  .notes-updated {
+    font-size: 11px;
+    color: var(--vsc-fg-muted);
+  }
+
+  .notes-delete-btn {
+    padding: 2px 10px;
+    font-size: 12px;
+  }
+
+  .notes-textarea {
+    @apply flex-1 resize-none outline-none;
+    min-height: 0;
+    padding: 12px 14px;
+    background-color: var(--vsc-bg);
+    color: var(--vsc-fg);
+    font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .notes-empty {
+    @apply flex flex-1 items-center justify-center;
+    font-size: 13px;
+    color: var(--vsc-fg-muted);
+  }
+
   .image-preview-modal {
     height: auto;
     max-height: 85vh;

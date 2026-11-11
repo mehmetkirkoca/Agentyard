@@ -3,6 +3,7 @@ import {Terminal} from "xterm";
 import {buildPathPaste} from "./attach-paste";
 import {pasteFromClipboard, sanitizePaste} from "./clipboard-paste";
 import {escapeHtml} from "./html-utils";
+import {Note, noteTitle} from "./notes-model";
 import {mcpServerDetailsHtml} from "./mcp-utils";
 import {findImageTags, PastedImage} from "./transcript-images";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
@@ -985,6 +986,173 @@ window.addEventListener("keydown", (e) => {
   e.preventDefault();
   e.stopPropagation();
   closeImagePreview();
+}, true);
+
+// Notes modal (Ctrl+Shift+N): free-form notes kept by main in electron-store. Edits are saved
+// after a short pause; switching notes or closing the modal flushes a pending save first.
+const NOTES_SELECTED_KEY = "notesSelectedId";
+const NOTE_SAVE_DELAY_MS = 400;
+let notes: Note[] = [];
+let selectedNoteId: string | null = null;
+let noteSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let notesReturnFocus: HTMLElement | null = null;
+
+const notesModal = () => document.getElementById("notes-modal");
+const isNotesOpen = () => notesModal()?.classList.contains("hidden") === false;
+const noteDate = (ms: number) => new Date(ms).toLocaleString("tr-TR", {dateStyle: "short", timeStyle: "short"});
+
+function rememberSelectedNote(id: string | null) {
+  selectedNoteId = id;
+  try {
+    if (id) localStorage.setItem(NOTES_SELECTED_KEY, id);
+    else localStorage.removeItem(NOTES_SELECTED_KEY);
+  } catch (error) {
+    console.error("Error saving selected note:", error);
+  }
+}
+
+function renderNotesList() {
+  const list = document.getElementById("notes-list");
+  if (!list) return;
+  list.replaceChildren(...notes.map(note => {
+    const item = document.createElement("button");
+    item.className = "notes-item" + (note.id === selectedNoteId ? " active" : "");
+    const title = document.createElement("div");
+    title.className = "notes-item-title";
+    title.textContent = noteTitle(note.content);
+    const date = document.createElement("div");
+    date.className = "notes-item-date";
+    date.textContent = noteDate(note.updatedAt);
+    item.append(title, date);
+    item.addEventListener("click", () => { void selectNote(note.id); });
+    return item;
+  }));
+}
+
+// loadContent=false after a save: the user may have typed on while it ran, so keep the textarea
+function renderNoteEditor(loadContent = true) {
+  const note = notes.find(n => n.id === selectedNoteId);
+  const textarea = document.getElementById("notes-textarea") as HTMLTextAreaElement | null;
+  document.getElementById("notes-empty")?.classList.toggle("hidden", !!note);
+  document.getElementById("notes-editor-toolbar")?.classList.toggle("hidden", !note);
+  textarea?.classList.toggle("hidden", !note);
+  if (!note || !textarea) return;
+  if (loadContent && textarea.value !== note.content) textarea.value = note.content;
+  const updated = document.getElementById("notes-updated");
+  if (updated) updated.textContent = `Son düzenleme: ${noteDate(note.updatedAt)}`;
+}
+
+async function flushNoteSave(): Promise<void> {
+  if (noteSaveTimer === null) return;
+  clearTimeout(noteSaveTimer);
+  noteSaveTimer = null;
+  const id = selectedNoteId;
+  const textarea = document.getElementById("notes-textarea") as HTMLTextAreaElement | null;
+  if (!id || !textarea) return;
+  try {
+    const saved = await window.agentyard.invoke("save-note", id, textarea.value) as Note;
+    notes = [saved, ...notes.filter(n => n.id !== saved.id)];
+    renderNotesList();
+    if (selectedNoteId === saved.id) renderNoteEditor(false);
+  } catch (error) {
+    showToast(`save-note failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
+async function selectNote(id: string | null) {
+  if (id === selectedNoteId) return;
+  await flushNoteSave();
+  rememberSelectedNote(id);
+  renderNotesList();
+  renderNoteEditor();
+  (document.getElementById("notes-textarea") as HTMLTextAreaElement | null)?.focus();
+}
+
+async function openNotes() {
+  notesReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  try {
+    notes = await window.agentyard.invoke("get-notes") as Note[];
+  } catch (error) {
+    showToast(`get-notes failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return;
+  }
+  let remembered: string | null = null;
+  try {
+    remembered = localStorage.getItem(NOTES_SELECTED_KEY);
+  } catch (error) {
+    console.error("Error restoring selected note:", error);
+  }
+  const initial = notes.find(n => n.id === remembered)?.id ?? notes[0]?.id ?? null;
+  rememberSelectedNote(initial);
+  notesModal()?.classList.remove("hidden");
+  renderNotesList();
+  renderNoteEditor();
+  (document.getElementById(initial ? "notes-textarea" : "notes-new") as HTMLElement | null)?.focus();
+}
+
+async function closeNotes() {
+  if (!isNotesOpen()) return;
+  await flushNoteSave();
+  notesModal()?.classList.add("hidden");
+  notesReturnFocus?.focus();
+  notesReturnFocus = null;
+}
+
+document.getElementById("notes-new")?.addEventListener("click", async () => {
+  await flushNoteSave();
+  try {
+    const created = await window.agentyard.invoke("create-note") as Note;
+    notes = [created, ...notes];
+    rememberSelectedNote(created.id);
+    renderNotesList();
+    renderNoteEditor();
+    (document.getElementById("notes-textarea") as HTMLTextAreaElement | null)?.focus();
+  } catch (error) {
+    showToast(`create-note failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+});
+
+document.getElementById("notes-delete")?.addEventListener("click", async () => {
+  const note = notes.find(n => n.id === selectedNoteId);
+  if (!note || !confirm(`"${noteTitle(note.content)}" notu silinsin mi?`)) return;
+  if (noteSaveTimer !== null) {
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = null;
+  }
+  try {
+    await window.agentyard.invoke("delete-note", note.id);
+    notes = notes.filter(n => n.id !== note.id);
+    rememberSelectedNote(notes[0]?.id ?? null);
+    renderNotesList();
+    renderNoteEditor();
+  } catch (error) {
+    showToast(`delete-note failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+});
+
+document.getElementById("notes-textarea")?.addEventListener("input", () => {
+  if (noteSaveTimer !== null) clearTimeout(noteSaveTimer);
+  noteSaveTimer = setTimeout(() => {
+    // flushNoteSave returns early on a null timer, so keep it set until the flush runs
+    void flushNoteSave();
+  }, NOTE_SAVE_DELAY_MS);
+});
+
+document.getElementById("notes-close")?.addEventListener("click", () => { void closeNotes(); });
+notesModal()?.addEventListener("mousedown", (e) => {
+  if (e.target === e.currentTarget) void closeNotes();
+});
+// Capture phase, so the shortcut works while a terminal has focus
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === "KeyN") {
+    e.preventDefault();
+    e.stopPropagation();
+    void (isNotesOpen() ? closeNotes() : openNotes());
+  } else if (e.key === "Escape" && isNotesOpen()) {
+    e.preventDefault();
+    e.stopPropagation();
+    void closeNotes();
+  }
 }, true);
 
 function addSession(persistedSession: PersistedSession, hasActivePty: boolean, render = true) {

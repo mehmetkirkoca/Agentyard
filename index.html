@@ -121,6 +121,30 @@
       </div>
     </div>
 
+    <!-- Notes Modal: free-form notes, toggled with Ctrl+Shift+N -->
+    <div id="notes-modal" class="modal-overlay hidden">
+      <div class="modal session-modal notes-modal">
+        <div class="session-modal-header">
+          <h2 class="modal-title">Notlar</h2>
+          <button id="notes-close" class="session-modal-close" title="Kapat (Esc)" aria-label="Kapat">×</button>
+        </div>
+        <div class="notes-body">
+          <div class="notes-sidebar">
+            <button id="notes-new" class="notes-new-btn">+ Yeni not</button>
+            <div id="notes-list" class="notes-list"></div>
+          </div>
+          <div class="notes-editor">
+            <div id="notes-empty" class="notes-empty">Not yok, + ile ekle</div>
+            <div id="notes-editor-toolbar" class="notes-editor-toolbar hidden">
+              <span id="notes-updated" class="notes-updated"></span>
+              <button id="notes-delete" class="btn-danger notes-delete-btn">Sil</button>
+            </div>
+            <textarea id="notes-textarea" class="notes-textarea hidden" spellcheck="false" placeholder="Notunu yaz..."></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Session Configuration Modal -->
     <div id="config-modal" class="modal-overlay hidden">
       <div class="modal">
