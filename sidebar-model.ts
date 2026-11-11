@@ -25,10 +25,12 @@ function buildGroup(
   now: number,
   staleDays: number,
 ): SidebarGroup {
+  // Favorites first, each part by activity
   const own = sessions
     .filter(s => s.projectId === project.id)
-    .sort((a, b) => activity(b) - activity(a));
+    .sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite) || activity(b) - activity(a));
   const isOlder = (s: PersistedSession) =>
+    !s.favorite &&
     now - activity(s) > staleDays * DAY_MS &&
     s.status !== SessionStatus.RUNNING &&
     !isAttention(s.status);

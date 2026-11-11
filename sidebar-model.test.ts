@@ -196,6 +196,30 @@ describe("archived sessions", () => {
   });
 });
 
+describe("favorite sessions", () => {
+  it("are listed first in recent, each part sorted by activity", () => {
+    const sessions = [
+      s("new", {lastActivity: NOW - DAY, status: SessionStatus.IDLE}),
+      s("fav-old", {favorite: true, lastActivity: NOW - 3 * DAY, status: SessionStatus.IDLE}),
+      s("fav-new", {favorite: true, lastActivity: NOW - 2 * DAY, status: SessionStatus.IDLE}),
+    ];
+    const [group] = buildSidebar([project], sessions, NOW);
+    expect(group.recent.map(x => x.id)).toEqual(["fav-new", "fav-old", "new"]);
+  });
+
+  it("never go to older", () => {
+    const [group] = buildSidebar([project], [s("f", {favorite: true, lastActivity: NOW - 30 * DAY, status: SessionStatus.IDLE})], NOW);
+    expect(group.recent.map(x => x.id)).toEqual(["f"]);
+    expect(group.older).toEqual([]);
+  });
+
+  it("stay in archive when archived", () => {
+    const [group] = buildSidebar([project], [s("f", {favorite: true, archived: true, lastActivity: NOW - DAY})], NOW);
+    expect(group.recent).toEqual([]);
+    expect(group.archived.map(x => x.id)).toEqual(["f"]);
+  });
+});
+
 describe("formatAge", () => {
   const minute = 60 * 1000;
   it.each([

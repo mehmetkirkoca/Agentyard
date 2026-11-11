@@ -1871,6 +1871,21 @@ trustedIpc.handle("set-session-archived", (_event, sessionId: string, archived: 
   }
 });
 
+// Only the sidebar's order changes: favorites are listed first in their group
+trustedIpc.handle("set-session-favorite", (_event, sessionId: string, favorite: boolean): {ok: true} | {ok: false; error: string} => {
+  try {
+    const sessions = getPersistedSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return {ok: false, error: `Session not found: ${sessionId}`};
+    if (favorite) session.favorite = true;
+    else delete session.favorite;
+    savePersistedSessions(sessions);
+    return {ok: true};
+  } catch (error) {
+    return {ok: false, error: `Updating favorite of session ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`};
+  }
+});
+
 trustedIpc.handle("set-skip-permissions", (_event, sessionId: string, value: boolean): void => {
   try {
     const sessions = getPersistedSessions();

@@ -1353,6 +1353,11 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
   const archiveMenuItem = sess
     ? `<button class="session-menu-item archive-session-btn" data-id="${sessionId}">${sess.meta.archived ? "Unarchive" : "Archive"}</button>`
     : '';
+  const isFavorite = !!sess?.meta.favorite;
+  const favoriteMenuItem = sess
+    ? `<button class="session-menu-item favorite-session-btn" data-id="${sessionId}">${isFavorite ? "Remove from favorites" : "Add to favorites"}</button>`
+    : '';
+  const favoriteStar = isFavorite ? `<span class="session-favorite-star" title="Favorite" aria-label="Favorite">★</span>` : '';
   const safeName = escapeHtml(name);
 
   const item = document.createElement("div");
@@ -1362,6 +1367,7 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
   item.innerHTML = `
     <div class="flex items-center space-x-2 flex-1 session-name-container">
       <span class="session-indicator status-closed"></span>
+      ${favoriteStar}
       <span class="truncate session-name-text" data-id="${sessionId}">${safeName}</span>
       <input type="text" class="session-name-input hidden" data-id="${sessionId}" value="${safeName}" />
     </div>
@@ -1374,6 +1380,7 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
         ${moveMenuItem}
         ${skipMenuItem}
         ${applyMenuItem}
+        ${favoriteMenuItem}
         ${archiveMenuItem}
         <button class="session-menu-item delete-session-btn" data-id="${sessionId}">Delete</button>
       </div>
@@ -1467,6 +1474,13 @@ function addToSidebar(list: HTMLElement, sessionId: string, name: string, config
     void setSessionArchived(sessionId);
   });
 
+  const favoriteBtn = item.querySelector(".favorite-session-btn");
+  favoriteBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu?.classList.add("hidden");
+    void setSessionFavorite(sessionId);
+  });
+
   // Apply to project button (only for worktree sessions)
   const applyBtn = item.querySelector(".apply-to-project-btn");
   applyBtn?.addEventListener("click", (e) => {
@@ -1513,6 +1527,25 @@ async function setSessionArchived(sessionId: string) {
   } catch (error) {
     console.error(`set-session-archived failed for session ${sessionId}:`, error);
     showToast("Archiving failed", "error");
+  }
+}
+
+// Star or unstar by the session's current state; only the sidebar's order changes
+async function setSessionFavorite(sessionId: string) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const favorite = !session.meta.favorite;
+  try {
+    const result = await window.agentyard.invoke("set-session-favorite", sessionId, favorite) as {ok: boolean; error?: string};
+    if (!result.ok) {
+      showToast(result.error ?? "Updating favorite failed", "error");
+      return;
+    }
+    session.meta = {...session.meta, favorite: favorite || undefined};
+    renderSidebar();
+  } catch (error) {
+    console.error(`set-session-favorite failed for session ${sessionId}:`, error);
+    showToast("Updating favorite failed", "error");
   }
 }
 

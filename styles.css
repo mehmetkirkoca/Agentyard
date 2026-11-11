@@ -441,6 +441,8 @@ body {
     border-radius: 3px;
     font-size: 13px;
     color: var(--vsc-fg);
+    /* Rows are a fixed 24px: a wrapped label would overlap the next one, so the menu widens instead */
+    white-space: nowrap;
   }
 
   .session-menu-item:hover {
@@ -460,6 +462,13 @@ body {
 
   .session-name-text {
     color: inherit;
+  }
+
+  .session-favorite-star {
+    @apply flex-none;
+    color: var(--vsc-warning);
+    font-size: 11px;
+    line-height: 1;
   }
 
   .session-name-input {

@@ -39,6 +39,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   "select-directory",
   "set-session-archived",
   "set-session-dir",
+  "set-session-favorite",
   "set-skip-permissions",
   "side-shell-start",
 ];

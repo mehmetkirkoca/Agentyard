@@ -19,6 +19,7 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 - **Status dots via hooks**: running, waiting for approval, done, closed, and open elsewhere, with a per-project "n waiting" counter. The hook settings are passed to `claude` via `--settings`; the global `~/.claude/settings.json` is never modified.
 - **Hover card**: hovering a session in the sidebar shows its last summary, last prompt, activity time and directory, without opening it.
 - **Fork**: start a new session as a copy of an existing conversation.
+- **Favorites**: star a session from its menu; it is listed at the top of its group and never moves to "Older".
 
 | Project with several directories | Session hover card |
 |---|---|
