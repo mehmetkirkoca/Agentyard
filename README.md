@@ -2,24 +2,54 @@
 
 Agentyard is a desktop app (Electron + TypeScript) for running and organizing many Claude Code and Gemini sessions side by side. Sessions are grouped into projects that can span several working directories, every conversation is kept in one central transcript store, and the terminals can be arranged in a split-pane layout so several agents stay visible at once.
 
+![Agentyard tour: hover cards, workspaces, prompt history, directory picker and side shell](docs/media/tour.gif)
+
 > **Fork of FleetCode.** Agentyard is a fork of [FleetCode](https://github.com/built-by-as/FleetCode) by built-by-as (Amrit Subramanian), based on FleetCode v1.0.1-beta.8 (commit 1cb4afd). Many thanks to the original author; the original project is linked here for reference.
 
 ## Features
+
+![Four agents side by side in a 2x2 split, with the project sidebar and status dots](docs/media/01-overview.png)
+
+### Sessions and projects
 
 - **Projects with multiple working directories**: a project owns one or more directories; each session runs in one chosen directory, and directories already used by another session are locked in the picker.
 - **Others (standalone sessions)**: sessions that do not belong to any project, shown in their own section.
 - **Multiple Coding Agents**: run Claude Code, Gemini CLI, or Codex in your project workspaces and worktrees.
 - **Central transcript store**: conversations live in `~/.agentyard/sessions/`; the session directory's `~/.claude/projects` folder contains a symlink to them, so a session can switch directories without losing its history. Existing Claude Code conversations found in `~/.claude/projects` are imported continuously.
 - **Status dots via hooks**: running, waiting for approval, done, closed, and open elsewhere, with a per-project "n waiting" counter. The hook settings are passed to `claude` via `--settings`; the global `~/.claude/settings.json` is never modified.
+- **Hover card**: hovering a session in the sidebar shows its last summary, last prompt, activity time and directory, without opening it.
 - **Fork**: start a new session as a copy of an existing conversation.
+
+| Project with several directories | Session hover card |
+|---|---|
+| ![Edit Project dialog listing three directories](docs/media/06-project-dirs.png) | ![Hover card with the last summary and last prompt of a session](docs/media/02-hover-card.png) |
+
+### Panes and workspaces
+
 - **Split-pane tree**: drop a session on a pane edge to split it; the 2x2 layout can move its splits linked or independently.
+- **Workspaces**: tabs above the panes keep separate pane layouts, each with its own sessions.
 - **Per-pane breadcrumb and directory picker**: `project › session › dir ▾ ⎇ branch` above every terminal.
+- **Prompt history**: the pane's top line shows the current prompt; its list jumps to any earlier prompt or forks the conversation right before it.
+- **Side shell**: a plain terminal under the agent, in the session's directory.
 - **Attachments**: add files from a dialog, paste an image from the clipboard, or drag and drop files into a pane.
 - **Voice toggle**: sends Claude's `/voice` command to the session.
+
+| Prompt history | Directory picker |
+|---|---|
+| ![Prompt history list of a session](docs/media/03-prompt-history.png) | ![Directory picker showing which directories are in use](docs/media/04-directory-picker.png) |
+
+![Side shell under the agent running git log](docs/media/05-side-shell.png)
+
+### Interface
+
 - **Per-group search** in the sidebar.
 - **Resizable, hideable sidebar.**
 - **VS Code Dark+ styled UI.**
 - Git worktree sessions, terminal settings and MCP server management inherited from FleetCode.
+
+| New session | Terminal settings |
+|---|---|
+| ![New Session Configuration dialog](docs/media/07-new-session.png) | ![Terminal Settings dialog](docs/media/08-settings.png) |
 
 ## Prerequisites
 
