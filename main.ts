@@ -11,11 +11,12 @@ import {promisify} from "util";
 import {v4 as uuidv4} from "uuid";
 import {attachmentFileName, attachmentsDir, buildTextPaste} from "./attach-utils";
 import {findPastedImage, PastedImage} from "./transcript-images";
-import {buildClaudeCommand, buildHookSettings, buildPtyEnv, claudeScrollEnv} from "./claude-launch";
+import {buildClaudeCommand, buildHookSettings, buildPtyEnv, buildStatusLineCommand, buildStatusLineScript, claudeScrollEnv, findUserStatusLine} from "./claude-launch";
 import {buildGeminiCommand, ensureGeminiStatusExtension, isGeminiVoiceModeEnabled, readGeminiPromptsAndModel} from "./gemini-launch";
 import {adoptAgyConversation, AGY_STATUS_ENV, AgyPluginResult, agyPromptsOf, agySessionName, buildAgyCommand, createAgyWaitingDetector, ensureAgySnapBridge, ensureAgyStatusPlugin, filterAgyEvents, resolveAgyBinary, stripAnsi} from "./antigravity-launch";
 import {AGY_FALLBACK_MODELS, AgyModelFamily, groupAgyModels} from "./antigravity-screen";
-import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, statusFilePath} from "./claude-paths";
+import {appHome, centralSessionsDir, claudeProjectFolder, hookSettingsPath, limitsDir, statusFilePath, statusLineNextPath, statusLineScriptPath} from "./claude-paths";
+import {parseClaudeLimits, ToolLimits} from "./usage-limits";
 import {legacyUserDataDir, runDataMigration} from "./data-migration";
 import {buildEditorLaunch, DEFAULT_EDITOR_ID, editorEnv} from "./editor-launch";
 import {addWorktree, applyPatch, diffAgainstBranch, getBranches, getCurrentBranch} from "./git-utils";
@@ -316,6 +317,85 @@ function processStatusFile(filePath: string): void {
     console.error(`Error processing status file ${filePath}:`, error);
   }
 }
+
+// --- Usage limits (the sidebar's LIMITS panel) ---
+// Claude Code passes its status JSON to the status line script, which keeps the latest one carrying
+// the account's limits in limits/claude.json; its mtime is when Claude reported them.
+let usageLimits: ToolLimits[] = [];
+let claudeLimitsMtime = 0;
+let limitsWatcher: fs.FSWatcher | null = null;
+let limitsPollTimer: NodeJS.Timeout | null = null;
+const LIMITS_POLL_INTERVAL_MS = 5000;
+
+const claudeLimitsFile = () => path.join(limitsDir(), "claude.json");
+
+function readUsageLimits(): void {
+  const file = claudeLimitsFile();
+  try {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return; // nothing reported yet
+      throw error;
+    }
+    if (stat.mtimeMs === claudeLimitsMtime) return;
+    claudeLimitsMtime = stat.mtimeMs;
+    const limits = parseClaudeLimits(fs.readFileSync(file, "utf8"), stat.mtimeMs);
+    if (!limits) return; // a half-written or foreign file: keep what was shown
+    usageLimits = [limits];
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("limits-changed", usageLimits);
+  } catch (error) {
+    console.error(`Error reading usage limits from ${file}:`, error);
+  }
+}
+
+// Rewritten at every start, so an update of the app updates the script too
+function installStatusLineScript(): boolean {
+  const script = statusLineScriptPath();
+  try {
+    fs.mkdirSync(limitsDir(), {recursive: true});
+    fs.writeFileSync(script, buildStatusLineScript(claudeLimitsFile()), {mode: 0o600});
+    return true;
+  } catch (error) {
+    console.error(`Error writing the status line script ${script}:`, error);
+    return false;
+  }
+}
+
+function startLimitsWatcher(): void {
+  readUsageLimits();
+  try {
+    limitsWatcher = fs.watch(limitsDir(), () => readUsageLimits());
+    limitsWatcher.on("error", (error) => console.error("Usage limits watcher error:", error));
+  } catch (error) {
+    console.error(`Watching ${limitsDir()} failed; polling only:`, error);
+  }
+  // fs.watch can miss a rename on some filesystems
+  limitsPollTimer = setInterval(readUsageLimits, LIMITS_POLL_INTERVAL_MS);
+}
+
+/**
+ * The session's statusLine: Agentyard's script, which keeps the limits and hands the JSON on to the
+ * status line the user had in that directory (its command in a file of the session's own).
+ * Undefined when the script is missing, so the user's own status line stays in charge.
+ */
+function sessionStatusLine(sessionUuid: string, dir: string): {command: string; padding?: number} | undefined {
+  const script = statusLineScriptPath();
+  if (!fs.existsSync(script)) return undefined;
+  const nextFile = statusLineNextPath(sessionUuid);
+  const user = findUserStatusLine(dir, os.homedir(), script);
+  if (user) {
+    fs.mkdirSync(path.dirname(nextFile), {recursive: true});
+    fs.writeFileSync(nextFile, user.command, {mode: 0o600});
+  } else {
+    fs.rmSync(nextFile, {force: true});
+  }
+  const command = buildStatusLineCommand(script, user ? nextFile : undefined);
+  return user?.padding !== undefined ? {command, padding: user.padding} : {command};
+}
+
+trustedIpc.handle("get-usage-limits", (): ToolLimits[] => usageLimits);
 
 // Start a run with an empty status file: its hooks append to it, earlier events are already applied.
 // Gemini's hook only writes to a file that exists, so this also turns status reporting on for it.
@@ -811,7 +891,13 @@ function spawnSessionPty(
               fs.mkdirSync(path.dirname(hookPath), {recursive: true});
               resetStatusFile(sessionUuid);
               const disableFullscreen = (store as any).get("terminalSettings")?.disableClaudeFullscreen === true;
-              fs.writeFileSync(hookPath, JSON.stringify(buildHookSettings(statusFile, {disableFullscreen}), null, 2));
+              let statusLine: {command: string; padding?: number} | undefined;
+              try {
+                statusLine = sessionStatusLine(sessionUuid, workingDirectory);
+              } catch (error) {
+                console.error(`Error setting up the status line of session ${sessionUuid}:`, error);
+              }
+              fs.writeFileSync(hookPath, JSON.stringify(buildHookSettings(statusFile, {disableFullscreen, statusLine}), null, 2));
               settingsPath = hookPath;
             } catch (error) {
               console.error(`Error writing hook settings file ${hookPath}:`, error);
@@ -2392,6 +2478,8 @@ app.on("before-quit", () => {
   }
   statusWatcher?.close();
   if (statusPollTimer) clearInterval(statusPollTimer);
+  limitsWatcher?.close();
+  if (limitsPollTimer) clearInterval(limitsPollTimer);
 });
 
 app.whenReady().then(() => {
@@ -2401,6 +2489,7 @@ app.whenReady().then(() => {
   migrateProjects();
   createWindow();
   startStatusWatcher();
+  if (installStatusLineScript()) startLimitsWatcher();
   setUpAgyStatusPlugin();
 
   // Spawn claude command runner PTY early so it's ready when needed (fire-and-forget)

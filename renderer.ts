@@ -11,6 +11,7 @@ import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} fro
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, formatAge, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey, resyncViewport} from "./terminal-utils";
 import {needsWaitingNotice, parseWaitingNoticeMode, WaitingNoticeMode, waitingNoticeTargets} from "./session-status";
+import {formatAgo, formatResetIn, LimitWindow, STALE_AFTER_MS, ToolLimits, windowView} from "./usage-limits";
 import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-presets";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
@@ -1759,6 +1760,163 @@ function hideSessionPreview() {
   sidebar.addEventListener("dragstart", hideSessionPreview);
   sidebar.addEventListener("scroll", hideSessionPreview, true);
   window.addEventListener("blur", hideSessionPreview);
+})();
+
+// ---- LIMITS panel: each AI tool's account limits as it last reported them ----
+const LIMITS_COLLAPSED_KEY = "limitsCollapsed";
+const LIMITS_REFRESH_MS = 30_000;
+const TOOL_NAMES: Record<ToolLimits["tool"], string> = {claude: "Claude"};
+let usageLimits: ToolLimits[] = [];
+
+function limitsCollapsed(): boolean {
+  try {
+    return localStorage.getItem(LIMITS_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setLimitsCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(LIMITS_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch (error) {
+    console.error("Error saving the LIMITS panel state:", error);
+  }
+}
+
+// Only the windows the tool reports get a row: a plan without a 5-hour limit (Ultra) reports the week only
+function limitsRow(label: string, window: LimitWindow, readAt: number, now: number): HTMLElement {
+  const view = windowView(window, readAt, now);
+  const row = document.createElement("div");
+  row.className = `limits-row ${view.state === "live" ? view.level : view.state}`;
+  const name = document.createElement("span");
+  name.className = "limits-row-label";
+  name.textContent = label;
+  const bar = document.createElement("div");
+  bar.className = "limits-bar";
+  const fill = document.createElement("div");
+  fill.className = "limits-bar-fill";
+  fill.style.width = `${view.percent}%`;
+  bar.appendChild(fill);
+  const value = document.createElement("span");
+  value.className = "limits-row-value";
+  value.textContent = view.state === "reset" ? "reset" : `${Math.round(view.percent)}%`;
+  row.append(name, bar, value);
+  return row;
+}
+
+function windowCardLine(label: string, window: LimitWindow | undefined, readAt: number, now: number): string {
+  if (!window) return "";
+  const view = windowView(window, readAt, now);
+  const when = window.resetsAt === undefined ? ""
+    : view.state === "reset" ? " · has reset"
+    : ` · resets ${new Date(window.resetsAt).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})} (in ${formatResetIn(window.resetsAt, now)})`;
+  const value = view.state === "reset" ? "new window" : `${Math.round(window.usedPercent)}% used`;
+  return `<div class="limits-card-row"><span>${escapeHtml(label)}</span><span>${escapeHtml(value + when)}</span></div>`;
+}
+
+function showLimitsCard(limits: ToolLimits, anchor: HTMLElement): void {
+  const card = document.getElementById("limits-card");
+  if (!card) return;
+  const now = Date.now();
+  const stale = now - limits.readAt > STALE_AFTER_MS;
+  card.innerHTML = `
+    <div class="limits-card-title">${escapeHtml(TOOL_NAMES[limits.tool])} usage limits</div>
+    ${windowCardLine("5-hour window", limits.fiveHour, limits.readAt, now)}
+    ${windowCardLine("Weekly", limits.week, limits.readAt, now)}
+    <div class="limits-card-note">Read ${escapeHtml(formatAgo(limits.readAt, now))} from a Claude session's status line${stale ? "; it may have been used elsewhere since" : ""}. Account-wide: every Claude session shares it.</div>
+  `;
+  card.classList.remove("hidden");
+  const box = anchor.getBoundingClientRect();
+  const sidebar = document.querySelector(".sidebar")?.getBoundingClientRect();
+  card.style.left = `${(sidebar?.right ?? box.right) + 8}px`;
+  card.style.top = `${Math.max(8, Math.min(box.top, window.innerHeight - card.offsetHeight - 8))}px`;
+}
+
+function hideLimitsCard(): void {
+  document.getElementById("limits-card")?.classList.add("hidden");
+}
+
+function renderLimitsPanel(): void {
+  const body = document.getElementById("limits-body");
+  const summary = document.getElementById("limits-summary");
+  const chevron = document.getElementById("limits-chevron");
+  const toggle = document.getElementById("limits-toggle");
+  if (!body || !summary) return;
+  const now = Date.now();
+  const collapsed = limitsCollapsed();
+  if (chevron) chevron.textContent = collapsed ? "▸" : "▾";
+  toggle?.setAttribute("aria-expanded", String(!collapsed));
+  body.classList.toggle("hidden", collapsed);
+  body.replaceChildren();
+  hideLimitsCard();
+
+  if (usageLimits.length === 0) {
+    summary.textContent = "";
+    const empty = document.createElement("div");
+    empty.className = "limits-empty";
+    empty.textContent = "Limits show after a Claude session's first reply (Pro and Max plans).";
+    body.appendChild(empty);
+    return;
+  }
+
+  const newest = Math.max(...usageLimits.map(l => l.readAt));
+  if (collapsed) {
+    // Each tool's fullest window that still holds
+    summary.innerHTML = usageLimits.map(l => {
+      const views = [l.fiveHour, l.week].filter((w): w is LimitWindow => !!w).map(w => windowView(w, l.readAt, now));
+      const top = views.reduce((a, b) => (b.percent > a.percent ? b : a), views[0]);
+      const cls = top && top.state === "live" && top.level !== "ok" ? ` class="limits-level-${top.level}"` : "";
+      return `${escapeHtml(TOOL_NAMES[l.tool])} <span${cls}>${top ? Math.round(top.percent) : 0}%</span>`;
+    }).join(" · ");
+  } else {
+    summary.textContent = formatAgo(newest, now);
+  }
+
+  for (const limits of usageLimits) {
+    const block = document.createElement("div");
+    const stale = now - limits.readAt > STALE_AFTER_MS;
+    block.className = `limits-tool${stale ? " stale" : ""}`;
+    const head = document.createElement("div");
+    head.className = "limits-tool-head";
+    const name = document.createElement("span");
+    name.className = "limits-tool-name";
+    name.textContent = TOOL_NAMES[limits.tool];
+    const note = document.createElement("span");
+    note.className = "limits-tool-note";
+    // The next reset to come: the 5-hour window's, else the week's
+    const next = [["5h", limits.fiveHour?.resetsAt], ["Wk", limits.week?.resetsAt]]
+      .find((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > now);
+    note.textContent = stale ? `read ${formatAgo(limits.readAt, now)}`
+      : next ? `${next[0]} resets in ${formatResetIn(next[1], now)}` : "";
+    head.append(name, note);
+    block.appendChild(head);
+    if (limits.fiveHour) block.appendChild(limitsRow("5h", limits.fiveHour, limits.readAt, now));
+    if (limits.week) block.appendChild(limitsRow("Wk", limits.week, limits.readAt, now));
+    block.addEventListener("mouseenter", () => showLimitsCard(limits, block));
+    block.addEventListener("mouseleave", hideLimitsCard);
+    body.appendChild(block);
+  }
+}
+
+(function initLimitsPanel() {
+  document.getElementById("limits-toggle")?.addEventListener("click", () => {
+    setLimitsCollapsed(!limitsCollapsed());
+    renderLimitsPanel();
+  });
+  window.agentyard.on("limits-changed", (limits: ToolLimits[]) => {
+    usageLimits = Array.isArray(limits) ? limits : [];
+    renderLimitsPanel();
+  });
+  window.agentyard.invoke("get-usage-limits")
+    .then((limits: ToolLimits[]) => {
+      usageLimits = Array.isArray(limits) ? limits : [];
+      renderLimitsPanel();
+    })
+    .catch((error: unknown) => console.error("get-usage-limits failed:", error));
+  renderLimitsPanel();
+  // Ages and "resets in" move on by themselves
+  setInterval(renderLimitsPanel, LIMITS_REFRESH_MS);
 })();
 
 function restoreSearchFocus() {

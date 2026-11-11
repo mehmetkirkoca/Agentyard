@@ -26,6 +26,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   "get-session-model",
   "get-session-prompts",
   "get-terminal-settings",
+  "get-usage-limits",
   "list-mcp-servers",
   "list-slash-commands",
   "open-in-editor",
@@ -67,6 +68,7 @@ export const SEND_CHANNELS: readonly string[] = [
 // Main-to-renderer events (webContents.send / event.reply <-> ipcRenderer.on)
 export const EVENT_CHANNELS: readonly string[] = [
   "focus-session",
+  "limits-changed",
   "load-persisted-sessions",
   "mcp-polling-started",
   "mcp-servers-updated",

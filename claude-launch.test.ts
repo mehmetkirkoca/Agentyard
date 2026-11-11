@@ -2,7 +2,7 @@ import {execFileSync} from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import {buildClaudeCommand, buildHookCommand, buildHookSettings, buildPtyEnv, claudeScrollEnv, INHERITED_CLAUDE_ENV_KEYS} from "./claude-launch";
+import {buildClaudeCommand, buildHookCommand, buildHookSettings, buildPtyEnv, buildStatusLineCommand, buildStatusLineScript, claudeScrollEnv, INHERITED_CLAUDE_ENV_KEYS} from "./claude-launch";
 import {parseHookEvents} from "./session-status";
 
 describe("buildPtyEnv", () => {
@@ -145,5 +145,58 @@ describe("buildClaudeCommand paths", () => {
     } finally {
       fs.rmSync(dir, {recursive: true, force: true});
     }
+  });
+});
+
+describe("status line", () => {
+  let dir: string;
+  let limitsFile: string;
+  let script: string;
+  const payload = (withLimits: boolean) => JSON.stringify({
+    model: {id: "claude-opus-5-5"},
+    ...(withLimits ? {rate_limits: {five_hour: {used_percentage: 42, resets_at: 1794410280}}} : {}),
+  });
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "status line '"));
+    limitsFile = path.join(dir, "limits dir", "claude.json");
+    fs.mkdirSync(path.dirname(limitsFile));
+    script = path.join(dir, "statusline.sh");
+    fs.writeFileSync(script, buildStatusLineScript(limitsFile));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, {recursive: true, force: true});
+  });
+  const run = (input: string, nextFile?: string) =>
+    execFileSync("sh", ["-c", buildStatusLineCommand(script, nextFile)], {input}).toString();
+
+  it("keeps the latest JSON that carries rate_limits and prints nothing on its own", () => {
+    expect(run(payload(true))).toBe("");
+    expect(JSON.parse(fs.readFileSync(limitsFile, "utf8")).rate_limits.five_hour.used_percentage).toBe(42);
+  });
+
+  it("leaves the kept limits alone for a JSON without rate_limits", () => {
+    run(payload(true));
+    run(payload(false));
+    expect(fs.readFileSync(limitsFile, "utf8")).toContain("rate_limits");
+    expect(fs.readdirSync(path.dirname(limitsFile))).toEqual(["claude.json"]);
+  });
+
+  it("hands the JSON to the user's own status line and prints what it prints", () => {
+    const nextFile = path.join(dir, "next");
+    fs.writeFileSync(nextFile, `jq -r '.model.id' 2>/dev/null || sed -n 's/.*"id":"\\([^"]*\\)".*/\\1/p'`);
+    expect(run(payload(true), nextFile).trim()).toBe("claude-opus-5-5");
+    expect(fs.existsSync(limitsFile)).toBe(true);
+  });
+
+  it("keeps going when the user's status line fails", () => {
+    const nextFile = path.join(dir, "next");
+    fs.writeFileSync(nextFile, "exit 3");
+    expect(() => run(payload(true), nextFile)).not.toThrow();
+  });
+
+  it("is passed to Claude through the hook settings, padding kept", () => {
+    const settings = buildHookSettings("/st/u.jsonl", {statusLine: {command: "sh /x/statusline.sh", padding: 0}}) as any;
+    expect(settings.statusLine).toEqual({type: "command", command: "sh /x/statusline.sh", padding: 0});
+    expect((buildHookSettings("/st/u.jsonl") as any).statusLine).toBeUndefined();
   });
 });

@@ -43,3 +43,25 @@ export function statusFilePath(sessionUuid: string, home: string = os.homedir())
 export function hookSettingsPath(sessionUuid: string, home: string = os.homedir()): string {
   return path.join(appHome(home), "hooks", `${sessionUuid}.json`);
 }
+
+/**
+ * Usage limits as the AI tools last reported them: <home>/.agentyard/limits/<tool>.json
+ */
+export function limitsDir(home: string = os.homedir()): string {
+  return path.join(appHome(home), "limits");
+}
+
+/**
+ * Claude Code's status line script, which keeps its usage limits: <home>/.agentyard/statusline.sh
+ */
+export function statusLineScriptPath(home: string = os.homedir()): string {
+  return path.join(appHome(home), "statusline.sh");
+}
+
+/**
+ * The user's own status line command for one session, run by the script after it:
+ * <home>/.agentyard/statusline-next/<uuid>
+ */
+export function statusLineNextPath(sessionUuid: string, home: string = os.homedir()): string {
+  return path.join(appHome(home), "statusline-next", sessionUuid);
+}

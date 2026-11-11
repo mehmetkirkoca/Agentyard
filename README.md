@@ -16,6 +16,7 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 - **Others (standalone sessions)**: sessions that do not belong to any project, shown in their own section.
 - **Multiple Coding Agents**: run Claude Code, Gemini CLI, or Codex in your project workspaces and worktrees.
 - **Central transcript store**: conversations live in `~/.agentyard/sessions/`; the session directory's `~/.claude/projects` folder contains a symlink to them, so a session can switch directories without losing its history. Existing Claude Code conversations found in `~/.claude/projects` are imported continuously.
+- **Usage limits**: the LIMITS panel at the foot of the sidebar shows Claude's 5-hour and weekly limits as Claude Code's status line reports them (Pro and Max plans). The status line is set through `--settings`; a status line of your own keeps working.
 - **Status dots via hooks**: running, waiting for approval, done, closed, and open elsewhere, with a per-project "n waiting" counter. The hook settings are passed to `claude` via `--settings`; the global `~/.claude/settings.json` is never modified.
 - **Waiting notice**: when a session starts waiting for an approval or an answer while you are not looking at it, a card in the app, a desktop notification, or both (Settings → Waiting Notifications) say so; each stays until you close it, and a click opens the session.
 - **Hover card**: hovering a session in the sidebar shows its last summary, last prompt, activity time and directory, without opening it.
