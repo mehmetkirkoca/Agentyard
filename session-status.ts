@@ -92,3 +92,28 @@ const TERMINAL_REPORT_RE =
 export function isTerminalReportOnly(data: string): boolean {
   return TERMINAL_REPORT_RE.test(data);
 }
+
+/**
+ * A session just started waiting (approval or question) and you are not looking at it: the window
+ * is in the background, or the session is not in a pane. Then the in-app notice is shown.
+ */
+export function needsWaitingNotice(
+  previous: SessionStatus | undefined,
+  next: SessionStatus,
+  view: {windowFocused: boolean; shownInPane: boolean},
+): boolean {
+  if (next !== SessionStatus.WAITING || previous === SessionStatus.WAITING) return false;
+  return !(view.windowFocused && view.shownInPane);
+}
+
+/** Where the waiting notice shows: the card in the app, the desktop's notification, or both. */
+export type WaitingNoticeMode = "in-app" | "system" | "both";
+
+/** A stored setting; anything unknown (older settings have none) is the in-app card. */
+export function parseWaitingNoticeMode(value: unknown): WaitingNoticeMode {
+  return value === "system" || value === "both" ? value : "in-app";
+}
+
+export function waitingNoticeTargets(mode: WaitingNoticeMode): {inApp: boolean; system: boolean} {
+  return {inApp: mode !== "system", system: mode !== "in-app"};
+}

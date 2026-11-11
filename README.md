@@ -17,6 +17,7 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 - **Multiple Coding Agents**: run Claude Code, Gemini CLI, or Codex in your project workspaces and worktrees.
 - **Central transcript store**: conversations live in `~/.agentyard/sessions/`; the session directory's `~/.claude/projects` folder contains a symlink to them, so a session can switch directories without losing its history. Existing Claude Code conversations found in `~/.claude/projects` are imported continuously.
 - **Status dots via hooks**: running, waiting for approval, done, closed, and open elsewhere, with a per-project "n waiting" counter. The hook settings are passed to `claude` via `--settings`; the global `~/.claude/settings.json` is never modified.
+- **Waiting notice**: when a session starts waiting for an approval or an answer while you are not looking at it, a card in the app, a desktop notification, or both (Settings → Waiting Notifications) say so; each stays until you close it, and a click opens the session.
 - **Hover card**: hovering a session in the sidebar shows its last summary, last prompt, activity time and directory, without opening it.
 - **Fork**: start a new session as a copy of an existing conversation.
 - **Favorites**: star a session from its menu; it is listed at the top of its group and never moves to "Older".

@@ -10,6 +10,7 @@ import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus,
 import {isStandaloneProject, STANDALONE_PROJECT_ID, STANDALONE_PROJECT_NAME} from "./project-constants";
 import {buildSidebar, buildStandaloneGroup, SidebarGroup, filterSidebarGroup, formatAge, moveProjectInOrder} from "./sidebar-model";
 import {isClaudeSessionReady, isCopyKey, resyncViewport} from "./terminal-utils";
+import {needsWaitingNotice, parseWaitingNoticeMode, WaitingNoticeMode, waitingNoticeTargets} from "./session-status";
 import {CUSTOM_EDITOR_ID, DEFAULT_EDITOR_ID, EDITOR_PRESETS, editorName, NO_EDITOR_ID} from "./editor-presets";
 import {currentPromptIndex, GEMINI_PROMPT_GLYPH, hasJumpToBottom, PROMPT_GLYPH, seekStep} from "./sticky-prompt";
 import {AGY_MODES, AgyMode, AgyModelFamily, agyEffortsFor, agyModelCommand, parseAgyFooter} from "./antigravity-screen";
@@ -111,6 +112,7 @@ interface TerminalSettings {
   editorCommand: string; // custom editor: program and arguments, {dir} = the session's directory
   scrollSpeed: number; // mouse wheel level, 0 = Default
   disableClaudeFullscreen: boolean; // Claude on the normal screen (real scrollback and scrollbar)
+  waitingNotice: WaitingNoticeMode; // a session waiting for you: card in the app, desktop notification, or both
 }
 
 interface ThemeColors {
@@ -311,6 +313,7 @@ const DEFAULT_SETTINGS: TerminalSettings = {
   editorCommand: "",
   scrollSpeed: 0,
   disableClaudeFullscreen: false,
+  waitingNotice: "in-app",
 };
 
 const sessions = new Map<string, Session>();
@@ -1334,6 +1337,86 @@ function showToast(message: string, kind: ToastKind = "info"): void {
   toast.addEventListener("click", close);
 
   container.appendChild(toast);
+}
+
+// "<session> is waiting for you": a card below the first pane's header that stays until its × is
+// clicked; a click on the card opens the session. One per session: a newer wait replaces its card.
+const WAITING_NOTICE_PROMPT_LENGTH = 120;
+const waitingNotices = new Map<string, HTMLElement>();
+
+// The notice's text, shared by the in-app card and the desktop notification
+function waitingNoticeText(session: Session): {title: string; project?: string; prompt?: string} {
+  const prompt = session.meta.lastPrompt?.replace(/\s+/g, " ").trim();
+  return {
+    title: `${session.name} is waiting for you`,
+    project: projects.find(p => p.id === session.meta.projectId)?.name,
+    prompt: prompt && prompt.length > WAITING_NOTICE_PROMPT_LENGTH ? `${prompt.slice(0, WAITING_NOTICE_PROMPT_LENGTH)}…` : prompt,
+  };
+}
+
+// Where the notice goes follows Settings → Waiting notifications
+function notifyWaiting(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const targets = waitingNoticeTargets(terminalSettings.waitingNotice);
+  if (targets.inApp) showWaitingNotice(sessionId);
+  if (targets.system) {
+    const text = waitingNoticeText(session);
+    const body = [text.project, text.prompt].filter(Boolean).join("\n");
+    window.agentyard.invoke("show-waiting-notification", sessionId, text.title, body)
+      .then((result: {ok: boolean; error?: string}) => {
+        if (!result.ok) {
+          console.error(`Desktop notification of session ${sessionId} failed: ${result.error}`);
+          // Not lost: the card shows instead when the desktop cannot
+          if (!targets.inApp) showWaitingNotice(sessionId);
+        }
+      })
+      .catch((error: unknown) => console.error(`show-waiting-notification failed for session ${sessionId}:`, error));
+  }
+}
+
+function showWaitingNotice(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  closeWaitingNotice(sessionId);
+  // Inside the pane area, below the first pane's header and prompt line: the top right of the
+  // window holds the window buttons and the pane header's buttons, which a lasting card would cover
+  let container = document.getElementById("waiting-notice-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "waiting-notice-container";
+    container.className = "waiting-notice-container";
+    (document.getElementById("session-container") ?? document.body).appendChild(container);
+  }
+  const {title, project: projectName, prompt: shortPrompt} = waitingNoticeText(session);
+
+  const card = document.createElement("div");
+  card.className = "toast toast-warning waiting-notice";
+  card.setAttribute("role", "alert");
+  card.title = "Open the session";
+  card.innerHTML = `
+    <div class="waiting-notice-head">
+      <span class="waiting-notice-title">${escapeHtml(title)}</span>
+      <button class="waiting-notice-close" title="Close" aria-label="Close notification">×</button>
+    </div>
+    ${projectName ? `<div class="waiting-notice-project">${escapeHtml(projectName)}</div>` : ""}
+    ${shortPrompt ? `<div class="waiting-notice-prompt">${escapeHtml(shortPrompt)}</div>` : ""}
+  `;
+  card.querySelector(".waiting-notice-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeWaitingNotice(sessionId);
+  });
+  card.addEventListener("click", () => handleSessionClick(sessionId));
+  waitingNotices.set(sessionId, card);
+  container.appendChild(card);
+}
+
+function closeWaitingNotice(sessionId: string): void {
+  const card = waitingNotices.get(sessionId);
+  if (!card) return;
+  waitingNotices.delete(sessionId);
+  card.classList.add("toast-leaving");
+  setTimeout(() => card.remove(), 200);
 }
 
 function addToSidebar(list: HTMLElement, sessionId: string, name: string, config: SessionConfig) {
@@ -4311,13 +4394,26 @@ window.agentyard.on("session-output", (sessionId: string, data: string) => {
 window.agentyard.on("session-status", (sessionId: string, status: SessionStatus) => {
   const session = sessions.get(sessionId);
   if (!session) return;
+  const previous = session.status;
   session.status = status;
   session.meta = { ...session.meta, status };
+  try {
+    if (needsWaitingNotice(previous, status, {windowFocused: document.hasFocus(), shownInPane: isShownInPane(sessionId)})) {
+      notifyWaiting(sessionId);
+    }
+  } catch (error) {
+    console.error(`Showing the waiting notice of session ${sessionId} failed:`, error);
+  }
   if (hasHookStatus(session.config)) void refreshSessionModel(sessionId);
   refreshSessionIndicator(sessionId);
   applyTabStatus(sessionId);
   renderSidebar();
   renderWorkspaceBar();
+});
+
+// A click on a desktop waiting notification (main brought the window forward)
+window.agentyard.on("focus-session", (sessionId: string) => {
+  handleSessionClick(sessionId);
 });
 
 // A hook event may follow a new prompt in the transcript: refresh that session's pane prompt line
@@ -4379,6 +4475,7 @@ window.agentyard.on("session-deleted", (sessionId: string) => {
     document.getElementById(`tab-${sessionId}`)?.remove();
     document.getElementById(`sidebar-${sessionId}`)?.remove();
     disposeSideShell(sessionId);
+    closeWaitingNotice(sessionId);
     sessions.delete(sessionId);
     sessionModes.delete(sessionId);
     sessionModels.delete(sessionId);
@@ -5287,6 +5384,7 @@ const settingsCursorBlink = document.getElementById("settings-cursor-blink") as 
 const settingsWorktreeDir = document.getElementById("settings-worktree-dir") as HTMLInputElement;
 const settingsScrollSpeed = document.getElementById("settings-scroll-speed") as HTMLSelectElement;
 const settingsDisableFullscreen = document.getElementById("settings-disable-fullscreen") as HTMLInputElement;
+const settingsWaitingNotice = document.getElementById("settings-waiting-notice") as HTMLSelectElement;
 const settingsEditor = document.getElementById("settings-editor") as HTMLSelectElement;
 const settingsEditorCommand = document.getElementById("settings-editor-command") as HTMLInputElement;
 const settingsEditorCommandGroup = document.getElementById("settings-editor-command-group");
@@ -5324,6 +5422,7 @@ async function loadSettings() {
   const [, savedSettings] = await Promise.all([loadHomeWorktreeDir(), window.agentyard.invoke("get-terminal-settings")]);
   if (savedSettings) {
     terminalSettings = { ...DEFAULT_SETTINGS, ...savedSettings };
+    terminalSettings.waitingNotice = parseWaitingNoticeMode(terminalSettings.waitingNotice);
   }
 }
 
@@ -5348,6 +5447,7 @@ function populateSettingsForm() {
   settingsScrollSpeed.value = String(terminalSettings.scrollSpeed);
   if (settingsScrollSpeed.selectedIndex === -1) settingsScrollSpeed.value = "0";
   settingsDisableFullscreen.checked = terminalSettings.disableClaudeFullscreen;
+  settingsWaitingNotice.value = terminalSettings.waitingNotice;
   const known = [CUSTOM_EDITOR_ID, NO_EDITOR_ID].includes(terminalSettings.editor)
     || EDITOR_PRESETS.some(p => p.id === terminalSettings.editor);
   settingsEditor.value = known ? terminalSettings.editor : DEFAULT_EDITOR_ID;
@@ -5420,6 +5520,7 @@ saveSettingsBtn?.addEventListener("click", async () => {
   terminalSettings.worktreeDir = settingsWorktreeDir.value || DEFAULT_SETTINGS.worktreeDir;
   terminalSettings.scrollSpeed = Number(settingsScrollSpeed.value) || 0;
   terminalSettings.disableClaudeFullscreen = settingsDisableFullscreen.checked;
+  terminalSettings.waitingNotice = parseWaitingNoticeMode(settingsWaitingNotice.value);
   terminalSettings.editor = settingsEditor.value || DEFAULT_EDITOR_ID;
   terminalSettings.editorCommand = settingsEditorCommand.value.trim();
 

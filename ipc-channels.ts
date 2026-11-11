@@ -41,6 +41,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   "set-session-dir",
   "set-session-favorite",
   "set-skip-permissions",
+  "show-waiting-notification",
   "side-shell-start",
 ];
 
@@ -65,6 +66,7 @@ export const SEND_CHANNELS: readonly string[] = [
 
 // Main-to-renderer events (webContents.send / event.reply <-> ipcRenderer.on)
 export const EVENT_CHANNELS: readonly string[] = [
+  "focus-session",
   "load-persisted-sessions",
   "mcp-polling-started",
   "mcp-servers-updated",

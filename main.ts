@@ -1,5 +1,5 @@
 import {exec, execFile, spawn, spawnSync} from "child_process";
-import {app, BrowserWindow, clipboard, dialog, ipcMain} from "electron";
+import {app, BrowserWindow, clipboard, dialog, ipcMain, Notification} from "electron";
 import Store from "electron-store";
 import * as fs from "fs";
 import * as pty from "node-pty";
@@ -989,6 +989,42 @@ trustedIpc.handle("clipboard-read-text", (): string => {
   } catch (error) {
     console.error("Error reading clipboard text:", error);
     throw error;
+  }
+});
+
+// "<session> is waiting for you" on the desktop: stays until closed there ("critical" with no
+// timeout); a click brings the window forward and opens the session. One per session: a newer wait
+// replaces it. Kept here, as a collected Notification loses its click handler.
+const waitingNotifications = new Map<string, Notification>();
+
+trustedIpc.handle("show-waiting-notification", (_event, sessionId: unknown, title: unknown, body: unknown): {ok: true} | {ok: false; error: string} => {
+  if (typeof sessionId !== "string" || typeof title !== "string" || typeof body !== "string") {
+    return {ok: false, error: "show-waiting-notification expects a session id, a title and a body"};
+  }
+  try {
+    if (!Notification.isSupported()) return {ok: false, error: "Desktop notifications are not supported here"};
+    waitingNotifications.get(sessionId)?.close();
+    const notification = new Notification({title, body, urgency: "critical", timeoutType: "never"});
+    notification.on("click", () => {
+      try {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        mainWindow.webContents.send("focus-session", sessionId);
+      } catch (error) {
+        console.error(`Opening session ${sessionId} from its notification failed:`, error);
+      }
+    });
+    notification.on("close", () => {
+      if (waitingNotifications.get(sessionId) === notification) waitingNotifications.delete(sessionId);
+    });
+    waitingNotifications.set(sessionId, notification);
+    notification.show();
+    return {ok: true};
+  } catch (error) {
+    console.error(`Showing the desktop notification of session ${sessionId} failed:`, error);
+    return {ok: false, error: `Desktop notification failed: ${error instanceof Error ? error.message : String(error)}`};
   }
 });
 

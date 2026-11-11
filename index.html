@@ -402,6 +402,16 @@
         </div>
 
         <div class="form-group">
+          <label class="form-label" for="settings-waiting-notice">Waiting Notifications</label>
+          <select id="settings-waiting-notice" class="form-select">
+            <option value="in-app">In-app</option>
+            <option value="system">System</option>
+            <option value="both">Both</option>
+          </select>
+          <span class="text-xs text-gray-400 mt-1 block">When a session waits for an approval or an answer while you are not looking at it: a card in the app, a desktop notification, or both. Each stays until you close it</span>
+        </div>
+
+        <div class="form-group">
           <label class="form-label">Worktree Root Directory</label>
           <div class="directory-input-group">
             <input type="text" id="settings-worktree-dir" class="form-input" readonly placeholder="~/worktrees" />

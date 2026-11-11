@@ -1,4 +1,4 @@
-import {isTerminalReportOnly, nextStatus, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
+import {isTerminalReportOnly, needsWaitingNotice, nextStatus, parseWaitingNoticeMode, waitingNoticeTargets, parseHookEvents, statusOnAppQuit, statusOnUserInput, statusOnView} from "./session-status";
 import {SessionStatus} from "./types";
 
 const ev = (hook_event_name: string, notification_type?: string) => ({hook_event_name, session_id: "s", notification_type});
@@ -120,5 +120,46 @@ describe("isTerminalReportOnly", () => {
     for (const data of ["", "y", "\r", "\x1b", "\x1b[A", "\x1b[B", "\x03", "\x1b[Ix", "1"]) {
       expect(isTerminalReportOnly(data)).toBe(false);
     }
+  });
+});
+
+describe("needsWaitingNotice", () => {
+  const away = {windowFocused: false, shownInPane: false};
+
+  it("asks for a notice when a session starts waiting while you are elsewhere", () => {
+    expect(needsWaitingNotice(SessionStatus.RUNNING, SessionStatus.WAITING, away)).toBe(true);
+    expect(needsWaitingNotice(undefined, SessionStatus.WAITING, away)).toBe(true);
+    // window in the background, even with the session in a pane
+    expect(needsWaitingNotice(SessionStatus.RUNNING, SessionStatus.WAITING, {windowFocused: false, shownInPane: true})).toBe(true);
+    // window in front, the session not in a pane
+    expect(needsWaitingNotice(SessionStatus.RUNNING, SessionStatus.WAITING, {windowFocused: true, shownInPane: false})).toBe(true);
+  });
+
+  it("asks for none while you look at the session in the focused window", () => {
+    expect(needsWaitingNotice(SessionStatus.RUNNING, SessionStatus.WAITING, {windowFocused: true, shownInPane: true})).toBe(false);
+  });
+
+  it("asks for none when it already waited or does not wait", () => {
+    expect(needsWaitingNotice(SessionStatus.WAITING, SessionStatus.WAITING, away)).toBe(false);
+    for (const next of [SessionStatus.RUNNING, SessionStatus.DONE, SessionStatus.IDLE]) {
+      expect(needsWaitingNotice(SessionStatus.WAITING, next, away)).toBe(false);
+    }
+  });
+});
+
+describe("waiting notice mode", () => {
+  it("keeps a known mode and falls back to in-app otherwise", () => {
+    expect(parseWaitingNoticeMode("in-app")).toBe("in-app");
+    expect(parseWaitingNoticeMode("system")).toBe("system");
+    expect(parseWaitingNoticeMode("both")).toBe("both");
+    for (const value of [undefined, null, "", "off", 1, {}]) {
+      expect(parseWaitingNoticeMode(value)).toBe("in-app");
+    }
+  });
+
+  it("names where each mode shows the notice", () => {
+    expect(waitingNoticeTargets("in-app")).toEqual({inApp: true, system: false});
+    expect(waitingNoticeTargets("system")).toEqual({inApp: false, system: true});
+    expect(waitingNoticeTargets("both")).toEqual({inApp: true, system: true});
   });
 });
