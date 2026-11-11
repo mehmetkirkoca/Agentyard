@@ -42,6 +42,7 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 
 ### Interface
 
+- **Notes**: `Ctrl+Shift+N` opens free-form notes, listed most recent first and saved automatically.
 - **Per-group search** in the sidebar.
 - **Resizable, hideable sidebar.**
 - **VS Code Dark+ styled UI.**
@@ -50,6 +51,8 @@ Agentyard is a desktop app (Electron + TypeScript) for running and organizing ma
 | New session | Terminal settings |
 |---|---|
 | ![New Session Configuration dialog](docs/media/07-new-session.png) | ![Terminal Settings dialog](docs/media/08-settings.png) |
+
+![Notes modal with a release checklist](docs/media/09-notes.png)
 
 ## Prerequisites
 
