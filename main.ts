@@ -44,6 +44,14 @@ import {
 } from "./transcript-sync";
 import {PersistedSession, Project, SessionConfig, SessionRuntime, SessionStatus, SessionType} from "./types";
 
+// One app per profile: a second one would find localStorage's leveldb locked by the first and come
+// up empty (only the Default workspace). It exits here, before the data migration, the store or a
+// window touches anything; the running one brings its window forward (second-instance below).
+if (!app.requestSingleInstanceLock()) {
+  console.log(`Agentyard is already running with this profile (${app.getPath("userData")}); focusing its window`);
+  process.exit(0);
+}
+
 const execAsync = promisify(exec);
 
 // The window loads this URL and IPC trusts only this URL; inside a package it points into app.asar
@@ -2368,6 +2376,21 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+// Another launch with this profile exited at the lock: show this app's window instead
+app.on("second-instance", () => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      if (app.isReady()) createWindow();
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  } catch (error) {
+    console.error("Error bringing the window forward for a second launch:", error);
+  }
 });
 
 app.on("window-all-closed", () => {
