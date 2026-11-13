@@ -1128,6 +1128,7 @@ trustedIpc.handle("get-home-dir", (): string => os.homedir());
 
 // Get git branches from directory
 trustedIpc.handle("get-branches", async (_event, dirPath: string) => {
+  if (!dirPath || !fs.existsSync(path.join(dirPath, ".git"))) return [];
   return getBranches(dirPath);
 });
 
@@ -2374,7 +2375,7 @@ trustedIpc.handle("get-dir-info", async (_event, projectId: string): Promise<Dir
       project.dirs.map(async dir => ({
         dir,
         name: path.basename(dir),
-        branch: fs.existsSync(dir) ? await getCurrentBranch(dir) : "",
+        branch: fs.existsSync(path.join(dir, ".git")) ? await getCurrentBranch(dir) : "",
         occupancy: occupancy[dir],
       })),
     );

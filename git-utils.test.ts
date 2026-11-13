@@ -164,10 +164,20 @@ describe('getCurrentBranch', () => {
   });
 
   it('returns empty string on error', async () => {
-    mockGit.revparse.mockRejectedValue(new Error('not a repo'));
+    mockGit.revparse.mockRejectedValue(new Error('some git error'));
 
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
     expect(await getCurrentBranch('/test/path')).toBe('');
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('does not log an error when directory is not a git repository', async () => {
+    mockGit.revparse.mockRejectedValue(new Error('fatal: not a git repository (or any of the parent directories): .git'));
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+    expect(await getCurrentBranch('/test/scratch')).toBe('');
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
 });

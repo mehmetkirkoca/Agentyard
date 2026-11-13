@@ -16,6 +16,10 @@ export function sortBranchesWithMainFirst(branches: string[]): string[] {
   });
 }
 
+function isNotGitRepoError(error: unknown): boolean {
+  return error instanceof Error && /not a git repository/i.test(error.message);
+}
+
 /**
  * Get git branches from a directory, sorted with main/master first
  */
@@ -26,7 +30,9 @@ export async function getBranches(dirPath: string): Promise<string[]> {
     const branches = branchSummary.all;
     return sortBranchesWithMainFirst(branches);
   } catch (error) {
-    console.error("Error getting branches:", error);
+    if (!isNotGitRepoError(error)) {
+      console.error("Error getting branches:", error);
+    }
     return [];
   }
 }
@@ -40,7 +46,9 @@ export async function getCurrentBranch(dirPath: string): Promise<string> {
     const branch = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
     return branch === "HEAD" ? "" : branch;
   } catch (error) {
-    console.error(`Error getting current branch for ${dirPath}:`, error);
+    if (!isNotGitRepoError(error)) {
+      console.error(`Error getting current branch for ${dirPath}:`, error);
+    }
     return "";
   }
 }
