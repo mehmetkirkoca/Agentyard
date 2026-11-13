@@ -8,8 +8,8 @@
     "build:ts": "tsc",
     "build:bundle": "esbuild renderer.ts --bundle --platform=browser --outfile=dist/renderer.bundle.js && esbuild preload.ts --bundle --platform=node --external:electron --outfile=dist/preload.js",
     "build": "npm run build:css && npm run build:ts && npm run build:bundle",
-    "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
+    "start": "npm run build && electron . --ozone-platform=x11",
+    "dev": "npm run build && electron . --ozone-platform=x11",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "test": "jest"
